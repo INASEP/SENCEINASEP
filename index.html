@@ -1542,6 +1542,7 @@ async function exportAttendance() {
    VISTA: LOG SENCE ADMIN
 ════════════════════════════════════════════════ */
 async function renderSenceLog(mc) {
+  // Mostrar el panel informativo y un contenedor para la tabla
   mc.innerHTML = `
     <div class="page-header">
       <div><h2>📋 Registros SENCE</h2><div class="breadcrumb">Historial de sesiones enviadas a SENCE</div></div>
@@ -1551,16 +1552,80 @@ async function renderSenceLog(mc) {
       <div class="sence-panel-body">
         <div class="sence-info-grid">
           <div class="sence-info-item"><label>Worker URL</label><span>${WORKER_URL}</span></div>
-          <div class="sence-info-item"><label>Ambiente</label><span id="senceModeLabel">Configurado en Worker</span></div>
+          <div class="sence-info-item"><label>Ambiente</label><span id="senceModeLabel">Cargando...</span></div>
         </div>
         <p style="font-size:12.5px;color:var(--text-mid);margin-top:8px">
           💡 Los tokens y credenciales están protegidos en Cloudflare Worker. Los registros finales se almacenan localmente en Firestore.
         </p>
       </div>
     </div>
-    <div id="logContainer"><div class="empty-state"><div class="icon">⏳</div><p>Cargando...</p></div></div>`;
-  await renderAttendance({ innerHTML: '' });
-  navigate('attendance');
+    <div id="senceLogTableContainer">
+      <div class="empty-state"><div class="icon">⏳</div><p>Cargando registros...</p></div>
+    </div>`;
+
+  // Cargar el modo (test/producción) desde el Worker
+  try {
+    const res = await fetch(`${WORKER_URL}/api/sence/modo`);
+    if (res.ok) {
+      const data = await res.json();
+      const modeSpan = document.getElementById('senceModeLabel');
+      if (modeSpan) modeSpan.textContent = data.testMode ? '⚠️ TEST' : '✅ PRODUCCIÓN';
+    } else {
+      document.getElementById('senceModeLabel').textContent = 'No disponible';
+    }
+  } catch (e) {
+    document.getElementById('senceModeLabel').textContent = 'Error al consultar';
+  }
+
+  // Cargar la tabla de asistencia en el contenedor específico
+  await cargarTablaAsistencia();
+}
+
+// Función auxiliar para cargar la tabla de asistencia
+async function cargarTablaAsistencia() {
+  const container = document.getElementById('senceLogTableContainer');
+  if (!container) return;
+
+  try {
+    const snap = await db.collection('senceAttendance').orderBy('createdAt', 'desc').limit(200).get();
+    if (snap.empty) {
+      container.innerHTML = '<div class="empty-state"><div class="icon">📭</div><p>Sin registros de asistencia.</p></div>';
+      return;
+    }
+
+    let html = `
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Alumno</th><th>RUN</th><th>Clase</th>
+                <th>Inicio SENCE</th><th>Cierre SENCE</th>
+                <th>ID Sesión SENCE</th><th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>`;
+
+    snap.docs.forEach(doc => {
+      const a = doc.data();
+      html += `
+        <tr>
+          <td>${escHtml(a.userName || a.userEmail || '—')}</td>
+          <td><span style="font-family:'DM Mono';font-size:12px">${escHtml(a.runAlumno || '—')}</span></td>
+          <td>${escHtml(a.classTitle || '—')}</td>
+          <td style="font-size:12px">${fmtDateTime(a.inicioSesion)}</td>
+          <td style="font-size:12px">${a.cierreSesion ? fmtDateTime(a.cierreSesion) : '<span class="badge badge-live">Activa</span>'}</td>
+          <td><span style="font-family:'DM Mono';font-size:11px;color:var(--text-light)">${escHtml((a.idSesionSence || '—').slice(0, 20))}${a.idSesionSence && a.idSesionSence.length > 20 ? '…' : ''}</span></td>
+          <td><span class="badge ${a.sessionOpen ? 'badge-green' : 'badge-gray'}">${a.sessionOpen ? 'Abierta' : 'Cerrada'}</span></td>
+        </tr>`;
+    });
+
+    html += `</tbody></table></div></div>`;
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>Error al cargar: ${e.message}</p></div>`;
+    console.error(e);
+  }
 }
 
 /* ════════════════════════════════════════════════
