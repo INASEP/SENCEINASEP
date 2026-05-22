@@ -1,0 +1,1774 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>INASEP — Clases en Vivo / Integración SENCE</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<!-- Firebase SDKs -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+<style>
+/* ══════════════════════════════════════════════
+   VARIABLES — hereda paleta INASEP
+══════════════════════════════════════════════ */
+:root {
+  --green-900: #0d1f14;
+  --green-800: #142a1b;
+  --green-700: #1e3d28;
+  --green-600: #2a5536;
+  --green-500: #3d7a4e;
+  --green-400: #4a8c5c;
+  --green-300: #68a87a;
+  --green-200: #9fcfab;
+  --green-100: #d4edda;
+  --green-50:  #f0f8f2;
+  --primary:      #4a8c5c;
+  --primary-dark: #3d7a4e;
+  --primary-light:#68a87a;
+  --accent:       #8fbc8f;
+  --sidebar-bg:   #0d1f14;
+  --sidebar-nav:  #142a1b;
+  --sidebar-hover:#1e3d28;
+  --sidebar-border: rgba(255,255,255,0.07);
+  --bg:       #f4f7f5;
+  --card-bg:  #ffffff;
+  --text:     #1a2e1e;
+  --text-mid: #4a6651;
+  --text-light:#7a9880;
+  --border:   #d6e8da;
+  --success: #27ae60;
+  --warning: #e67e22;
+  --danger:  #c0392b;
+  --info:    #2980b9;
+  --sence-blue: #003087;
+  --sence-red:  #c8102e;
+  --radius:  10px;
+  --radius-lg: 16px;
+  --shadow:  0 2px 14px rgba(13,31,20,0.08);
+  --shadow-md: 0 6px 24px rgba(13,31,20,0.13);
+  --transition: 0.18s ease;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: 'Sora', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+/* ══════════════════════════════════════════════
+   LAYOUT PRINCIPAL
+══════════════════════════════════════════════ */
+.dashboard { display: flex; min-height: 100vh; }
+
+.sidebar {
+  width: 260px;
+  background: var(--sidebar-bg);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top:0; left:0; bottom:0;
+  z-index: 200;
+  overflow-y: auto;
+  transition: transform 0.28s ease;
+}
+.sidebar-top {
+  padding: 22px 20px 16px;
+  border-bottom: 1px solid var(--sidebar-border);
+  display: flex; align-items: center; gap: 12px;
+}
+.sidebar-top .brand { color:#fff; font-size:15px; font-weight:700; }
+.sidebar-top .sub   { color: rgba(255,255,255,0.45); font-size:11px; margin-top:2px; }
+.sidebar-nav { flex:1; padding: 10px 0; }
+.sidebar-nav a {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 20px;
+  color: rgba(255,255,255,0.65);
+  text-decoration: none;
+  font-size: 13.5px; font-weight: 500;
+  transition: var(--transition);
+  cursor: pointer;
+  border-left: 3px solid transparent;
+}
+.sidebar-nav a:hover { background: var(--sidebar-hover); color:#fff; }
+.sidebar-nav a.active {
+  background: var(--sidebar-hover);
+  color: var(--green-200);
+  border-left-color: var(--green-300);
+  font-weight: 600;
+}
+.sidebar-footer {
+  padding: 16px 20px;
+  border-top: 1px solid var(--sidebar-border);
+}
+.sidebar-footer button {
+  background: none; border: 1px solid rgba(255,255,255,0.15);
+  color: rgba(255,255,255,0.55); padding: 8px 14px;
+  border-radius: 7px; font-size: 12.5px; cursor: pointer;
+  width: 100%; font-family: inherit; transition: var(--transition);
+}
+.sidebar-footer button:hover { background: rgba(255,255,255,0.07); color:#fff; }
+
+.main-wrapper { margin-left: 260px; flex:1; display:flex; flex-direction:column; }
+.topbar {
+  height: 60px; background:#fff; border-bottom:1px solid var(--border);
+  display: flex; align-items: center; padding: 0 28px; gap: 16px;
+  position: sticky; top:0; z-index:100; box-shadow: var(--shadow);
+}
+.topbar-title { font-size:16px; font-weight:700; color:var(--green-900); margin-right:auto; }
+.topbar-user {
+  display:flex; align-items:center; gap:8px;
+  font-size:13px; font-weight:600; color:var(--text-mid);
+}
+.avatar {
+  width:32px; height:32px; border-radius:50%;
+  background:var(--green-500); color:#fff;
+  font-weight:700; font-size:13px;
+  display:flex; align-items:center; justify-content:center;
+}
+.mob-menu-btn {
+  display:none; background:var(--sidebar-bg); border:none;
+  color:#fff; width:38px; height:38px; border-radius:8px;
+  font-size:18px; cursor:pointer; align-items:center; justify-content:center;
+}
+.mob-overlay {
+  display:none; position:fixed; inset:0;
+  background:rgba(0,0,0,0.45); z-index:150;
+}
+.mob-overlay.active { display:block; }
+.main-content { padding: 28px 32px; flex:1; }
+
+/* ══════════════════════════════════════════════
+   SENCE BADGE
+══════════════════════════════════════════════ */
+.sence-badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: linear-gradient(135deg, var(--sence-blue) 0%, #004bb5 100%);
+  color: #fff; padding: 5px 14px; border-radius: 20px;
+  font-size: 11.5px; font-weight: 700; letter-spacing: 0.5px;
+}
+.sence-badge-red {
+  background: linear-gradient(135deg, var(--sence-red) 0%, #e8192d 100%);
+}
+
+/* ══════════════════════════════════════════════
+   PAGE HEADER
+══════════════════════════════════════════════ */
+.page-header {
+  margin-bottom: 24px; display:flex; align-items:flex-start;
+  justify-content:space-between; flex-wrap:wrap; gap:12px;
+}
+.page-header h2 { font-size:22px; font-weight:700; color:var(--green-900); }
+.breadcrumb { font-size:12.5px; color:var(--text-light); margin-top:3px; }
+.breadcrumb a { color:var(--primary); text-decoration:none; cursor:pointer; }
+
+/* ══════════════════════════════════════════════
+   CARDS
+══════════════════════════════════════════════ */
+.card {
+  background:var(--card-bg); border-radius:var(--radius);
+  box-shadow:var(--shadow); padding:22px 24px;
+  margin-bottom:18px; border:1px solid var(--border);
+}
+.card-header {
+  display:flex; justify-content:space-between; align-items:center;
+  margin-bottom:16px; flex-wrap:wrap; gap:10px;
+}
+.card-header h3 { font-size:16px; font-weight:700; color:var(--green-900); }
+
+/* Stat Cards */
+.stats-grid {
+  display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr));
+  gap:16px; margin-bottom:24px;
+}
+.stat-card {
+  background:#fff; border:1px solid var(--border); border-radius:var(--radius);
+  padding:18px 20px; box-shadow:var(--shadow);
+}
+.stat-card .stat-icon { font-size:26px; margin-bottom:8px; }
+.stat-card .stat-value { font-size:26px; font-weight:700; color:var(--primary); line-height:1; }
+.stat-card .stat-label { font-size:12px; color:var(--text-light); margin-top:4px; font-weight:500; text-transform:uppercase; letter-spacing:0.4px; }
+
+/* ══════════════════════════════════════════════
+   BUTTONS
+══════════════════════════════════════════════ */
+.btn {
+  display:inline-flex; align-items:center; gap:6px;
+  padding:10px 20px; border:none; border-radius:8px;
+  font-size:13.5px; font-weight:600; font-family:inherit;
+  cursor:pointer; transition:var(--transition);
+  text-decoration:none; letter-spacing:0.2px; white-space:nowrap;
+}
+.btn-primary { background:var(--primary); color:#fff; }
+.btn-primary:hover { background:var(--primary-dark); box-shadow:0 4px 16px rgba(74,140,92,0.35); transform:translateY(-1px); }
+.btn-secondary { background:#eef3f0; color:var(--text-mid); }
+.btn-secondary:hover { background:#dde8e1; }
+.btn-danger { background:var(--danger); color:#fff; }
+.btn-danger:hover { background:#a93226; }
+.btn-success { background:var(--success); color:#fff; }
+.btn-success:hover { background:#219a52; }
+.btn-warning { background:var(--warning); color:#fff; }
+.btn-warning:hover { background:#ca6f1e; }
+.btn-info { background:var(--info); color:#fff; }
+.btn-info:hover { background:#1f6ea3; }
+.btn-sm { padding:6px 13px; font-size:12px; border-radius:6px; }
+.btn:disabled { opacity:0.55; cursor:not-allowed; transform:none !important; }
+.btn-sence {
+  background: linear-gradient(135deg, var(--sence-blue), #0041a0);
+  color:#fff; border:none;
+}
+.btn-sence:hover { opacity:0.9; transform:translateY(-1px); }
+.btn-live {
+  background: linear-gradient(135deg, #c0392b, #e74c3c);
+  color:#fff; animation: livePulse 2s ease-in-out infinite;
+}
+@keyframes livePulse {
+  0%,100% { box-shadow: 0 0 0 0 rgba(192,57,43,0.4); }
+  50%      { box-shadow: 0 0 0 8px rgba(192,57,43,0); }
+}
+
+/* ══════════════════════════════════════════════
+   TABLE
+══════════════════════════════════════════════ */
+.table-wrap { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:13.5px; }
+th, td { padding:11px 14px; text-align:left; border-bottom:1px solid #eef2ef; }
+th { background:var(--green-50); font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-mid); }
+tr:last-child td { border-bottom:none; }
+tr:hover td { background:#f9fcfa; }
+
+/* ══════════════════════════════════════════════
+   BADGE
+══════════════════════════════════════════════ */
+.badge { display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600; }
+.badge-green  { background:#e6f9ee; color:#1a7a3a; }
+.badge-gray   { background:#f0f0f0; color:#666; }
+.badge-blue   { background:#e6f0ff; color:#1a56db; }
+.badge-orange { background:#fef3e6; color:#b45309; }
+.badge-red    { background:#fde8e8; color:#a93226; }
+.badge-live   { background:#fde8e8; color:#c0392b; animation: blinkBadge 1.5s ease infinite; }
+@keyframes blinkBadge { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+/* ══════════════════════════════════════════════
+   MODAL
+══════════════════════════════════════════════ */
+.modal-overlay {
+  position:fixed; inset:0; background:rgba(13,31,20,0.65);
+  z-index:999; display:flex; align-items:center; justify-content:center;
+  padding:20px; backdrop-filter:blur(4px);
+}
+.modal {
+  background:#fff; border-radius:var(--radius-lg);
+  padding:28px 30px; width:100%; max-width:680px;
+  max-height:90vh; overflow-y:auto;
+  box-shadow:0 30px 80px rgba(0,0,0,0.3);
+}
+.modal h3 { margin-bottom:18px; font-size:18px; font-weight:700; color:var(--green-900); }
+.modal-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:18px; flex-wrap:wrap; }
+.modal-wide { max-width: 900px; }
+
+/* ══════════════════════════════════════════════
+   FORM
+══════════════════════════════════════════════ */
+.form-group { margin-bottom:15px; }
+.form-group label { display:block; font-size:11.5px; font-weight:600; text-transform:uppercase; letter-spacing:0.6px; color:var(--text-mid); margin-bottom:6px; }
+.form-group input, .form-group select, .form-group textarea {
+  width:100%; padding:11px 13px; border:2px solid var(--border);
+  border-radius:8px; font-size:14px; font-family:inherit;
+  background:#fafcfb; color:var(--text); transition:var(--transition); resize:vertical;
+}
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+  outline:none; border-color:var(--primary); background:#fff;
+  box-shadow:0 0 0 3px rgba(74,140,92,0.12);
+}
+.form-group small { display:block; margin-top:5px; font-size:12px; color:var(--text-light); }
+.form-row { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+
+/* ══════════════════════════════════════════════
+   CLASE EN VIVO — CARD ESPECIAL
+══════════════════════════════════════════════ */
+.live-class-card {
+  background:#fff; border-radius:var(--radius-lg);
+  border:1px solid var(--border); overflow:hidden;
+  box-shadow:var(--shadow); transition:var(--transition);
+  margin-bottom:16px;
+}
+.live-class-card:hover { box-shadow:var(--shadow-md); transform:translateY(-2px); }
+.live-class-header {
+  background: linear-gradient(135deg, var(--green-900) 0%, var(--green-700) 100%);
+  padding:16px 20px; display:flex; align-items:center; justify-content:space-between;
+}
+.live-class-header h4 { color:#fff; font-size:15px; font-weight:700; }
+.live-class-body { padding:18px 20px; }
+.live-class-meta {
+  display:flex; gap:16px; flex-wrap:wrap;
+  font-size:13px; color:var(--text-mid); margin-bottom:14px;
+}
+.live-class-meta span { display:flex; align-items:center; gap:5px; }
+.live-class-actions { display:flex; gap:8px; flex-wrap:wrap; }
+
+/* ══════════════════════════════════════════════
+   VIDEO PLAYER AREA
+══════════════════════════════════════════════ */
+.video-room {
+  background:#000; border-radius:var(--radius-lg);
+  overflow:hidden; position:relative; min-height:500px;
+  display:flex; align-items:center; justify-content:center;
+}
+.video-placeholder {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  color:rgba(255,255,255,0.6); gap:12px; padding:40px;
+  text-align:center;
+}
+.video-placeholder .icon { font-size:60px; opacity:0.4; }
+iframe.video-frame { width:100%; height:100%; min-height:500px; border:none; }
+
+/* Cronómetro de sesión */
+.session-timer {
+  background: linear-gradient(135deg, var(--green-900), var(--green-700));
+  border-radius:var(--radius); padding:16px 20px;
+  display:flex; align-items:center; justify-content:space-between;
+  color:#fff; margin-bottom:16px;
+}
+.timer-display {
+  font-family:'DM Mono',monospace; font-size:32px; font-weight:500;
+  color:var(--green-200); letter-spacing:3px;
+}
+.timer-label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:1px; color:rgba(255,255,255,0.5); margin-bottom:2px; }
+.timer-warning .timer-display { color:#f1c40f; animation: blinkBadge 1s ease infinite; }
+.timer-danger  .timer-display { color:#e74c3c; animation: blinkBadge 0.5s ease infinite; }
+
+/* ══════════════════════════════════════════════
+   SENCE INTEGRATION PANEL
+══════════════════════════════════════════════ */
+.sence-panel {
+  border:2px solid var(--sence-blue); border-radius:var(--radius-lg);
+  overflow:hidden; margin-bottom:16px;
+}
+.sence-panel-header {
+  background: var(--sence-blue); color:#fff;
+  padding:12px 18px; display:flex; align-items:center; gap:10px;
+}
+.sence-panel-header h4 { font-size:14px; font-weight:700; }
+.sence-panel-body { padding:18px 20px; background:#f8fbff; }
+
+.sence-info-grid {
+  display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
+  gap:12px; margin-bottom:14px;
+}
+.sence-info-item label { font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; color:#666; display:block; margin-bottom:3px; }
+.sence-info-item span { font-size:13.5px; font-weight:600; color:var(--text); font-family:'DM Mono',monospace; }
+
+/* Asistencia estado */
+.attendance-status {
+  display:flex; align-items:center; gap:12px;
+  padding:14px 18px; border-radius:10px;
+  font-weight:600; font-size:14px; margin-bottom:14px;
+}
+.attendance-status.open    { background:#e6f9ee; color:#1a7a3a; border:2px solid #27ae60; }
+.attendance-status.closed  { background:#fde8e8; color:#a93226; border:2px solid var(--danger); }
+.attendance-status.pending { background:#fff8e6; color:#b45309; border:2px solid #e67e22; }
+.attendance-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+.dot-green  { background:var(--success); animation:blinkBadge 2s ease infinite; }
+.dot-red    { background:var(--danger); }
+.dot-orange { background:var(--warning); animation:blinkBadge 2s ease infinite; }
+
+/* ══════════════════════════════════════════════
+   PARTICIPANTES TABLE
+══════════════════════════════════════════════ */
+.participant-row td { vertical-align:middle; }
+.participant-avatar {
+  width:30px; height:30px; border-radius:50%;
+  background:var(--green-500); color:#fff;
+  font-weight:700; font-size:12px;
+  display:inline-flex; align-items:center; justify-content:center;
+}
+
+/* ══════════════════════════════════════════════
+   TOAST
+══════════════════════════════════════════════ */
+.toast-container { position:fixed; top:16px; right:16px; z-index:9999; display:flex; flex-direction:column; gap:8px; max-width:360px; }
+.toast {
+  background:#fff; border-radius:10px; padding:13px 16px;
+  box-shadow:0 4px 20px rgba(0,0,0,0.15); display:flex; align-items:center; gap:10px;
+  font-size:13.5px; font-weight:500; border-left:4px solid var(--primary);
+  animation:slideInRight 0.25s ease;
+}
+.toast.success { border-color:var(--success); }
+.toast.error   { border-color:var(--danger); }
+.toast.warning { border-color:var(--warning); }
+@keyframes slideInRight { from{opacity:0;transform:translateX(20px)} to{opacity:1;transform:none} }
+
+/* ══════════════════════════════════════════════
+   AUTH SCREEN
+══════════════════════════════════════════════ */
+.auth-wrap {
+  min-height:100vh; display:flex; align-items:center; justify-content:center;
+  padding:24px 16px;
+  background:var(--green-900);
+  background-image: radial-gradient(ellipse at 20% 50%, rgba(74,140,92,0.18) 0%, transparent 60%),
+                    radial-gradient(ellipse at 80% 20%, rgba(143,188,143,0.10) 0%, transparent 50%);
+}
+.auth-card {
+  background:#fff; border-radius:var(--radius-lg);
+  padding:40px 36px 36px; width:100%; max-width:430px;
+  box-shadow:0 24px 64px rgba(0,0,0,0.35);
+}
+.auth-logo { text-align:center; margin-bottom:28px; }
+.auth-logo .brand-name { font-size:32px; font-weight:800; color:var(--green-400); letter-spacing:2px; }
+.auth-logo .brand-sub { font-size:12px; color:var(--text-light); text-transform:uppercase; letter-spacing:1px; margin-top:4px; }
+.auth-card h2 { font-size:19px; font-weight:700; color:var(--green-900); margin-bottom:22px; text-align:center; }
+.alert { padding:11px 15px; border-radius:8px; font-size:13px; font-weight:500; display:none; margin-bottom:16px; border-left:4px solid; }
+.alert-error   { background:#fdecea; color:#9b2335; border-color:#e74c3c; }
+.alert-success { background:#eafaf1; color:#1e7e34; border-color:#27ae60; }
+
+/* ══════════════════════════════════════════════
+   UTILIDADES
+══════════════════════════════════════════════ */
+.hidden { display:none !important; }
+.flex { display:flex; }
+.items-center { align-items:center; }
+.justify-between { justify-content:space-between; }
+.gap-2 { gap:8px; }
+.gap-3 { gap:12px; }
+.mt-1 { margin-top:6px; }
+.mt-2 { margin-top:14px; }
+.mb-2 { margin-bottom:14px; }
+.text-right { text-align:right; }
+.text-center { text-align:center; }
+.empty-state { text-align:center; padding:50px 20px; color:var(--text-light); }
+.empty-state .icon { font-size:48px; margin-bottom:12px; }
+
+/* ══════════════════════════════════════════════
+   SECCIÓN: CÓMO FUNCIONA SENCE
+══════════════════════════════════════════════ */
+.how-it-works { display:flex; gap:0; overflow:hidden; border-radius:var(--radius); border:1px solid var(--border); }
+.hiw-step {
+  flex:1; padding:18px 16px; text-align:center; border-right:1px solid var(--border);
+  background:#fff;
+}
+.hiw-step:last-child { border-right:none; }
+.hiw-num {
+  width:36px; height:36px; border-radius:50%; background:var(--green-100); color:var(--green-900);
+  font-weight:800; font-size:15px; display:inline-flex; align-items:center; justify-content:center;
+  margin-bottom:8px;
+}
+.hiw-step h5 { font-size:12.5px; font-weight:700; color:var(--green-900); margin-bottom:4px; }
+.hiw-step p  { font-size:11.5px; color:var(--text-light); line-height:1.5; }
+
+/* ══════════════════════════════════════════════
+   RESPONSIVE
+══════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  .sidebar { transform: translateX(-100%); }
+  .sidebar.open { transform: none; }
+  .main-wrapper { margin-left:0; }
+  .mob-menu-btn { display:flex; }
+  .main-content { padding:16px; }
+  .form-row { grid-template-columns:1fr; }
+  .stats-grid { grid-template-columns:1fr 1fr; }
+  .how-it-works { flex-direction:column; }
+  .hiw-step { border-right:none; border-bottom:1px solid var(--border); }
+}
+</style>
+</head>
+<body>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- AUTH SCREEN -->
+<div id="authSection" class="auth-wrap">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <div class="brand-name">INASEP</div>
+      <div class="brand-sub">Clases en Vivo — Módulo SENCE</div>
+    </div>
+    <div id="alertAuth" class="alert"></div>
+    <h2>Iniciar Sesión</h2>
+    <div class="form-group">
+      <label>Correo electrónico</label>
+      <input type="email" id="loginEmail" placeholder="correo@ejemplo.com" autocomplete="email">
+    </div>
+    <div class="form-group">
+      <label>Contraseña</label>
+      <input type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <button class="btn btn-primary" style="width:100%;justify-content:center;padding:13px 20px;font-size:15px" onclick="login()">Ingresar</button>
+    <p style="text-align:center;margin-top:12px;font-size:12.5px;color:var(--text-light)">
+      ¿Necesitas acceso? Contacta al administrador.
+    </p>
+  </div>
+</div>
+
+<!-- DASHBOARD -->
+<div id="dashboardSection" class="dashboard hidden">
+  <div class="mob-overlay" id="mobOverlay" onclick="closeSidebar()"></div>
+
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-top">
+      <div><div class="brand">INASEP</div><div class="sub">Módulo Clases en Vivo</div></div>
+    </div>
+    <div style="padding:12px 20px 8px; border-bottom:1px solid var(--sidebar-border)">
+      <div id="sbName" style="font-size:13px;color:rgba(255,255,255,0.75);font-weight:600;"></div>
+      <div id="sbEmail" style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:2px;"></div>
+      <div id="sbRole"  style="margin-top:6px;"></div>
+    </div>
+    <nav class="sidebar-nav" id="sidebarNav"></nav>
+    <div class="sidebar-footer">
+      <button onclick="logout()">🚪 Cerrar Sesión</button>
+    </div>
+  </div>
+
+  <div class="main-wrapper">
+    <div class="topbar">
+      <button class="mob-menu-btn" onclick="openSidebar()">☰</button>
+      <span class="topbar-title" id="topbarTitle">Clases en Vivo</span>
+      <div class="topbar-user">
+        <div class="avatar" id="topbarAvatar">?</div>
+        <span id="topbarName"></span>
+      </div>
+    </div>
+    <div class="main-content" id="mainContent">
+      <div class="empty-state"><div class="icon">⏳</div><p>Cargando...</p></div>
+    </div>
+  </div>
+</div>
+
+<div id="modalContainer"></div>
+
+<script>
+/* ════════════════════════════════════════════════
+   FIREBASE CONFIG (tu configuración real)
+════════════════════════════════════════════════ */
+const firebaseConfig = {
+  apiKey: "AIzaSyAqwDK_8M6KCYSG2oCuYc6Z8ErlaKrs_kE",
+  authDomain: "lms-sence.firebaseapp.com",
+  projectId: "lms-sence",
+  storageBucket: "lms-sence.firebasestorage.app",
+  messagingSenderId: "650163867290",
+  appId: "1:650163867290:web:60a7b47c07d876c5fd1923"
+};
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db   = firebase.firestore();
+
+/* ════════════════════════════════════════════════
+   WORKER URL (cambia por la de tu Worker)
+════════════════════════════════════════════════ */
+const WORKER_URL = "https://sence-proxy.inasep.workers.dev";   // <--- CAMBIA AQUÍ
+
+/* ════════════════════════════════════════════════
+   ESTADO GLOBAL
+════════════════════════════════════════════════ */
+let currentUser = null;
+let currentRole = null;
+let sessionTimer = null;
+
+/* ════════════════════════════════════════════════
+   AUTH
+════════════════════════════════════════════════ */
+auth.onAuthStateChanged(async (user) => {
+  if (user) {
+    currentUser = user;
+    try {
+      const doc = await db.collection('users').doc(user.uid).get();
+      currentRole = doc.exists ? (doc.data().role || 'student') : 'student';
+    } catch(e) { currentRole = 'student'; }
+    showDashboard();
+  } else {
+    showAuth();
+  }
+});
+
+function showAuth() {
+  document.getElementById('authSection').classList.remove('hidden');
+  document.getElementById('dashboardSection').classList.add('hidden');
+}
+function showDashboard() {
+  document.getElementById('authSection').classList.add('hidden');
+  document.getElementById('dashboardSection').classList.remove('hidden');
+  updateSidebar();
+  renderMain();
+}
+async function login() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const pass  = document.getElementById('loginPassword').value;
+  if (!email || !pass) return showAuthAlert('Completa todos los campos.');
+  try {
+    await auth.signInWithEmailAndPassword(email, pass);
+  } catch(err) {
+    const msgs = {
+      'auth/user-not-found':'Usuario no encontrado.',
+      'auth/wrong-password':'Contraseña incorrecta.',
+      'auth/invalid-credential':'Credenciales inválidas.',
+      'auth/too-many-requests':'Demasiados intentos. Espera unos minutos.'
+    };
+    showAuthAlert(msgs[err.code] || 'Error al iniciar sesión.');
+  }
+}
+function logout() {
+  if (sessionTimer) clearInterval(sessionTimer);
+  auth.signOut();
+}
+function showAuthAlert(msg) {
+  const el = document.getElementById('alertAuth');
+  el.textContent = msg;
+  el.className = 'alert alert-error';
+  el.style.display = 'block';
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    const af = document.getElementById('authSection');
+    if (af && !af.classList.contains('hidden')) login();
+  }
+});
+
+/* ════════════════════════════════════════════════
+   SIDEBAR
+════════════════════════════════════════════════ */
+function updateSidebar() {
+  const name  = currentUser?.displayName || currentUser?.email?.split('@')[0] || 'Usuario';
+  const email = currentUser?.email || '';
+  const initials = name.slice(0,2).toUpperCase();
+  document.getElementById('sbName').textContent  = name;
+  document.getElementById('sbEmail').textContent = email;
+  document.getElementById('sbRole').innerHTML    = `<span class="badge ${currentRole==='admin'?'badge-green':'badge-blue'}">${currentRole==='admin'?'Administrador':'Alumno'}</span>`;
+  document.getElementById('topbarName').textContent = name;
+  document.getElementById('topbarAvatar').textContent = initials;
+
+  const isAdmin = currentRole === 'admin';
+  const links = isAdmin ? [
+    { label:'📊 Panel',            view:'dashboard' },
+    { label:'📹 Clases en Vivo',   view:'live-classes' },
+    { label:'➕ Nueva Clase',      view:'new-class' },
+    { label:'👥 Participantes',    view:'attendance' },
+    { label:'📋 Registro SENCE',   view:'sence-log' },
+    { label:'⚙️ Config. SENCE',    view:'sence-config' },
+  ] : [
+    { label:'🏠 Mis Cursos',       view:'my-courses' },
+    { label:'📹 Clases en Vivo',   view:'live-classes' },
+    { label:'📋 Mi Asistencia',    view:'my-attendance' },
+  ];
+
+  document.getElementById('sidebarNav').innerHTML = links.map(l =>
+    `<a onclick="navigate('${l.view}')" id="nav-${l.view}">${l.label}</a>`
+  ).join('');
+}
+function openSidebar()  { document.getElementById('sidebar').classList.add('open'); document.getElementById('mobOverlay').classList.add('active'); }
+function closeSidebar() { document.getElementById('sidebar').classList.remove('open'); document.getElementById('mobOverlay').classList.remove('active'); }
+
+/* ════════════════════════════════════════════════
+   ROUTER
+════════════════════════════════════════════════ */
+let currentView = '';
+function navigate(view, params={}) {
+  currentView = view;
+  closeSidebar();
+  document.querySelectorAll('.sidebar-nav a').forEach(a => a.classList.remove('active'));
+  const navEl = document.getElementById('nav-' + view.split('/')[0]);
+  if (navEl) navEl.classList.add('active');
+  renderMain(view, params);
+}
+function renderMain(view, params={}) {
+  if (!view) view = currentRole === 'admin' ? 'dashboard' : 'my-courses';
+  currentView = view;
+  const mc = document.getElementById('mainContent');
+  mc.innerHTML = '<div class="empty-state"><div class="icon">⏳</div><p>Cargando...</p></div>';
+
+  const views = {
+    'dashboard':     renderAdminDashboard,
+    'live-classes':  renderLiveClasses,
+    'new-class':     renderNewClass,
+    'attendance':    renderAttendance,
+    'sence-log':     renderSenceLog,
+    'sence-config':  renderSenceConfig,
+    'my-courses':    renderMyCourses,
+    'my-attendance': renderMyAttendance,
+    'class-room':    renderClassRoom,
+  };
+
+  const fn = views[view.split('/')[0]];
+  if (fn) fn(mc, params);
+  else mc.innerHTML = '<div class="empty-state"><div class="icon">🔍</div><p>Vista no encontrada.</p></div>';
+}
+
+/* ════════════════════════════════════════════════
+   TOAST, MODAL, UTILIDADES (igual que original)
+════════════════════════════════════════════════ */
+function toast(msg, type='info', dur=4000) {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<span>${msg}</span>`;
+  document.getElementById('toastContainer').appendChild(el);
+  setTimeout(() => el.remove(), dur);
+}
+function openModal(html, wide=false) {
+  document.getElementById('modalContainer').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+      <div class="modal ${wide?'modal-wide':''}">
+        ${html}
+      </div>
+    </div>`;
+}
+function closeModal() {
+  document.getElementById('modalContainer').innerHTML = '';
+}
+function escHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtDate(ts) {
+  if (!ts) return '—';
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleDateString('es-CL',{day:'2-digit',month:'2-digit',year:'numeric'});
+}
+function fmtDateTime(ts) {
+  if (!ts) return '—';
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleDateString('es-CL',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+function genSessionId() {
+  return 'INASEP-' + Date.now() + '-' + Math.random().toString(36).substr(2,9).toUpperCase();
+}
+
+/* ════════════════════════════════════════════════
+   VISTA: DASHBOARD ADMIN
+════════════════════════════════════════════════ */
+async function renderAdminDashboard(mc) {
+  try {
+    const [classSnap, attSnap] = await Promise.all([
+      db.collection('liveClasses').get(),
+      db.collection('senceAttendance').get()
+    ]);
+    const total     = classSnap.size;
+    const active    = classSnap.docs.filter(d=>d.data().status==='active').length;
+    const totalAtt  = attSnap.size;
+    const openAtt   = attSnap.docs.filter(d=>d.data().sessionOpen===true).length;
+
+    mc.innerHTML = `
+      <div class="page-header">
+        <div>
+          <h2>🏠 Panel de Control</h2>
+          <div class="breadcrumb">Módulo Clases en Vivo — INASEP</div>
+        </div>
+        <div class="flex gap-2">
+          <span class="sence-badge">🇨🇱 Integración SENCE</span>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-icon">📹</div><div class="stat-value">${total}</div><div class="stat-label">Total Clases</div></div>
+        <div class="stat-card"><div class="stat-icon">🔴</div><div class="stat-value">${active}</div><div class="stat-label">En Vivo Ahora</div></div>
+        <div class="stat-card"><div class="stat-icon">✅</div><div class="stat-value">${totalAtt}</div><div class="stat-label">Registros SENCE</div></div>
+        <div class="stat-card"><div class="stat-icon">🟢</div><div class="stat-value">${openAtt}</div><div class="stat-label">Sesiones Abiertas</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3>⚡ Acciones Rápidas</h3>
+        </div>
+        <div class="flex gap-2 flex-wrap">
+          <button class="btn btn-primary" onclick="navigate('new-class')">➕ Nueva Clase en Vivo</button>
+          <button class="btn btn-info"    onclick="navigate('live-classes')">📹 Ver Clases</button>
+          <button class="btn btn-success" onclick="navigate('attendance')">👥 Ver Asistencia</button>
+          <button class="btn btn-secondary" onclick="navigate('sence-log')">📋 Registros SENCE</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h3>🔗 ¿Cómo funciona la integración SENCE?</h3></div>
+        <div class="how-it-works">
+          <div class="hiw-step"><div class="hiw-num">1</div><h5>Alumno accede</h5><p>El alumno ingresa a la clase en vivo desde su cuenta INASEP</p></div>
+          <div class="hiw-step"><div class="hiw-num">2</div><h5>Inicio Sesión SENCE</h5><p>Redirección al portal SENCE con ClaveÚnica para registrar la asistencia</p></div>
+          <div class="hiw-step"><div class="hiw-num">3</div><h5>Clase en Vivo</h5><p>El alumno asiste a la videoconferencia. Se muestra cronómetro de sesión</p></div>
+          <div class="hiw-step"><div class="hiw-num">4</div><h5>Cierre Sesión SENCE</h5><p>Al terminar, el alumno cierra sesión en SENCE con ClaveÚnica</p></div>
+          <div class="hiw-step"><div class="hiw-num">5</div><h5>Registro OK</h5><p>La asistencia queda registrada en SIC con inicio y fin de sesión</p></div>
+        </div>
+      </div>`;
+  } catch(e) {
+    mc.innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>Error cargando datos: ${e.message}</p></div>`;
+  }
+}
+
+/* ════════════════════════════════════════════════
+   VISTA: CLASES EN VIVO (igual que original, solo se reutiliza)
+════════════════════════════════════════════════ */
+async function renderLiveClasses(mc) {
+  mc.innerHTML = `
+    <div class="page-header">
+      <div><h2>📹 Clases en Vivo</h2><div class="breadcrumb">Gestión de videoconferencias con registro SENCE</div></div>
+      ${currentRole==='admin' ? '<button class="btn btn-primary" onclick="navigate(\'new-class\')">➕ Nueva Clase</button>' : ''}
+    </div>
+    <div id="classesContainer"><div class="empty-state"><div class="icon">⏳</div><p>Cargando clases...</p></div></div>`;
+
+  try {
+    const snap = await db.collection('liveClasses').orderBy('scheduledAt','desc').get();
+    const cont = document.getElementById('classesContainer');
+    if (snap.empty) {
+      cont.innerHTML = `<div class="empty-state"><div class="icon">📭</div><p>No hay clases programadas.</p></div>`;
+      return;
+    }
+
+    cont.innerHTML = snap.docs.map(doc => {
+      const c = doc.data();
+      const isLive = c.status === 'active';
+      const isPast = c.status === 'finished';
+      const statusBadge = isLive
+        ? '<span class="badge badge-live">🔴 EN VIVO</span>'
+        : isPast ? '<span class="badge badge-gray">✅ Finalizada</span>'
+        : '<span class="badge badge-blue">📅 Programada</span>';
+      const btn = currentRole === 'admin'
+        ? `<button class="btn btn-sm btn-warning" onclick="event.stopPropagation();editClass('${doc.id}')">✏️ Editar</button>
+           <button class="btn btn-sm btn-danger"  onclick="event.stopPropagation();deleteClass('${doc.id}')">🗑️</button>
+           <button class="btn btn-sm ${isLive?'btn-danger':'btn-success'}" onclick="event.stopPropagation();toggleClassStatus('${doc.id}','${c.status}')">
+             ${isLive?'⏹ Finalizar':'▶️ Iniciar'}
+           </button>`
+        : `<button class="btn btn-sm btn-primary" onclick="navigate('class-room',{id:'${doc.id}'})">
+             ${isLive ? '🔴 Entrar EN VIVO' : '👁️ Ver Clase'}
+           </button>`;
+
+      return `
+        <div class="live-class-card">
+          <div class="live-class-header">
+            <h4>${escHtml(c.title)}</h4>
+            ${statusBadge}
+          </div>
+          <div class="live-class-body">
+            <div class="live-class-meta">
+              <span>📅 ${fmtDateTime(c.scheduledAt)}</span>
+              <span>⏱ ${c.duration || 60} min</span>
+              <span>🎓 ${escHtml(c.courseName || 'Sin curso')}</span>
+              <span>📋 CodSENCE: <strong>${escHtml(c.codSence || '—')}</strong></span>
+            </div>
+            ${c.description ? `<p style="font-size:13px;color:var(--text-mid);margin-bottom:12px;">${escHtml(c.description)}</p>` : ''}
+            <div class="live-class-actions">${btn}</div>
+          </div>
+        </div>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('classesContainer').innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>${e.message}</p></div>`;
+  }
+}
+
+/* ════════════════════════════════════════════════
+   CREAR / EDITAR CLASE (igual que original)
+════════════════════════════════════════════════ */
+async function renderNewClass(mc, params={}) {
+  const id   = params.id || null;
+  const data = params.data || null;
+
+  mc.innerHTML = `
+    <div class="page-header">
+      <div><h2>${id?'✏️ Editar':'➕ Nueva'} Clase en Vivo</h2>
+      <div class="breadcrumb"><a onclick="navigate('live-classes')">Clases en Vivo</a> › ${id?'Editar':'Nueva'}</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><h3>📋 Información de la Clase</h3></div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Título de la Clase *</label>
+          <input type="text" id="fc_title" value="${escHtml(data?.title||'')}" placeholder="Ej: Seguridad Privada — Módulo 1">
+        </div>
+        <div class="form-group">
+          <label>Curso Asociado</label>
+          <input type="text" id="fc_courseName" value="${escHtml(data?.courseName||'')}" placeholder="Ej: Guardia de Seguridad Básico">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Descripción</label>
+        <textarea id="fc_desc" rows="3" placeholder="Describe los temas a tratar...">${escHtml(data?.description||'')}</textarea>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Fecha y Hora *</label>
+          <input type="datetime-local" id="fc_date" value="${data?.scheduledAt ? new Date(data.scheduledAt.toDate()).toISOString().slice(0,16) : ''}">
+        </div>
+        <div class="form-group">
+          <label>Duración (minutos) *</label>
+          <input type="number" id="fc_duration" value="${data?.duration||60}" min="15" max="480" placeholder="60">
+        </div>
+      </div>
+    </div>
+
+    <div class="sence-panel">
+      <div class="sence-panel-header">
+        <span>🇨🇱</span>
+        <h4>Configuración SENCE — Registro de Asistencia</h4>
+      </div>
+      <div class="sence-panel-body">
+        <p style="font-size:13px;color:var(--text-mid);margin-bottom:14px;">
+          Estos datos se usan para registrar inicio y cierre de sesión en SENCE mediante ClaveÚnica.
+          Los encontrarás en <strong>SIC Administrativo → Mantenedores → Cursos</strong>.
+        </p>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Código Oferta SENCE (CodSence) *</label>
+            <input type="text" id="fc_codSence" value="${escHtml(data?.codSence||'')}" placeholder="Ej: CAP-15-01-13-0446" style="font-family:'DM Mono',monospace">
+            <small>Código del curso en SIC. Mín 10 caracteres.</small>
+          </div>
+          <div class="form-group">
+            <label>Código de Curso / ID Acción *</label>
+            <input type="text" id="fc_codigoCurso" value="${escHtml(data?.codigoCurso||'')}" placeholder="Ej: CAP-15-01-13-0446" style="font-family:'DM Mono',monospace">
+            <small>Identificador interno. Mín 7 caracteres.</small>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Línea de Capacitación</label>
+            <select id="fc_linea">
+              <option value="3" ${(data?.lineaCapacitacion||3)==3?'selected':''}>3 — Franquicia Tributaria / Impulsa Personas</option>
+              <option value="1" ${(data?.lineaCapacitacion)==1?'selected':''}>1 — Programas Sociales / Becas Laborales</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Estado inicial</label>
+            <select id="fc_status">
+              <option value="scheduled" ${(data?.status||'scheduled')==='scheduled'?'selected':''}>📅 Programada</option>
+              <option value="active"    ${data?.status==='active'?'selected':''}>🔴 Activa (EN VIVO)</option>
+              <option value="finished"  ${data?.status==='finished'?'selected':''}>✅ Finalizada</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><h3>🎥 Plataforma de Videoconferencia</h3></div>
+      <div class="form-group">
+        <label>Tipo de Video</label>
+        <select id="fc_videoType" onchange="updateVideoFields()">
+          <option value="youtube"  ${(data?.videoType||'youtube')==='youtube'?'selected':''}>🔴 YouTube Live</option>
+          <option value="meet"     ${data?.videoType==='meet'?'selected':''}>📱 Google Meet</option>
+          <option value="zoom"     ${data?.videoType==='zoom'?'selected':''}>💙 Zoom</option>
+          <option value="teams"    ${data?.videoType==='teams'?'selected':''}>🟦 Microsoft Teams</option>
+          <option value="jitsi"    ${data?.videoType==='jitsi'?'selected':''}>🟢 Jitsi Meet (Gratuito)</option>
+          <option value="custom"   ${data?.videoType==='custom'?'selected':''}>🔗 URL personalizada</option>
+        </select>
+        <small id="videoTypeHelp">Para YouTube Live usa la URL de transmisión o el embed.</small>
+      </div>
+      <div class="form-group">
+        <label id="videoUrlLabel">URL de la Videoconferencia *</label>
+        <input type="url" id="fc_videoUrl" value="${escHtml(data?.videoUrl||'')}" placeholder="https://...">
+        <small id="videoUrlHelp">Pega el enlace de la sala de videoconferencia.</small>
+      </div>
+      <div id="jitsiConfig" class="hidden">
+        <div class="form-group">
+          <label>Nombre de la sala Jitsi</label>
+          <input type="text" id="fc_jitsiRoom" value="${escHtml(data?.jitsiRoom||'')}" placeholder="INASEP-Clase-001">
+          <small>Se genera automáticamente la sala en meet.jit.si si dejas la URL vacía.</small>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex gap-2 justify-between flex-wrap">
+      <button class="btn btn-secondary" onclick="navigate('live-classes')">← Cancelar</button>
+      <button class="btn btn-primary" onclick="saveClass('${id||''}')">
+        ${id ? '💾 Guardar Cambios' : '✅ Crear Clase'}
+      </button>
+    </div>`;
+
+  updateVideoFields();
+}
+
+function updateVideoFields() {
+  const type  = document.getElementById('fc_videoType').value;
+  const label = document.getElementById('videoUrlLabel');
+  const help  = document.getElementById('videoUrlHelp');
+  const jitsi = document.getElementById('jitsiConfig');
+  const hints = {
+    youtube: ['URL YouTube Live / Embed', 'Ej: https://www.youtube.com/watch?v=XXXXX o https://youtu.be/XXXXX'],
+    meet:    ['URL Google Meet', 'Ej: https://meet.google.com/xxx-xxxx-xxx'],
+    zoom:    ['URL Zoom', 'Ej: https://us02web.zoom.us/j/XXXXXXXXX'],
+    teams:   ['URL Microsoft Teams', 'Pega el enlace de unión a la reunión'],
+    jitsi:   ['URL Jitsi (opcional)', 'Déjala vacía para usar el nombre de sala a continuación'],
+    custom:  ['URL personalizada', 'Cualquier URL de videoconferencia compatible con iframe']
+  };
+  const [l, h] = hints[type] || hints.custom;
+  if (label) label.textContent = l;
+  if (help)  help.textContent  = h;
+  if (jitsi) jitsi.classList.toggle('hidden', type !== 'jitsi');
+}
+
+async function saveClass(id) {
+  const title       = document.getElementById('fc_title').value.trim();
+  const courseName  = document.getElementById('fc_courseName').value.trim();
+  const description = document.getElementById('fc_desc').value.trim();
+  const dateVal     = document.getElementById('fc_date').value;
+  const duration    = parseInt(document.getElementById('fc_duration').value) || 60;
+  const codSence    = document.getElementById('fc_codSence').value.trim();
+  const codigoCurso = document.getElementById('fc_codigoCurso').value.trim();
+  const linea       = parseInt(document.getElementById('fc_linea').value);
+  const status      = document.getElementById('fc_status').value;
+  const videoType   = document.getElementById('fc_videoType').value;
+  let   videoUrl    = document.getElementById('fc_videoUrl').value.trim();
+  const jitsiRoom   = document.getElementById('fc_jitsiRoom')?.value.trim() || '';
+
+  if (videoType === 'jitsi' && !videoUrl && jitsiRoom) {
+    videoUrl = `https://meet.jit.si/${encodeURIComponent(jitsiRoom)}`;
+  }
+
+  if (!title || title.length < 3)     return toast('⚠️ El título debe tener al menos 3 caracteres.','warning');
+  if (!dateVal)                        return toast('⚠️ Selecciona fecha y hora.','warning');
+  if (!codSence)                       return toast('⚠️ El Código SENCE es obligatorio.','warning');
+  if (!codigoCurso || codigoCurso.length < 7) return toast('⚠️ El Código de Curso debe tener al menos 7 caracteres.','warning');
+
+  const data = {
+    title, courseName, description,
+    scheduledAt: firebase.firestore.Timestamp.fromDate(new Date(dateVal)),
+    duration, codSence, codigoCurso, lineaCapacitacion: linea,
+    status, videoType, videoUrl, jitsiRoom,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    createdBy: currentUser.uid
+  };
+
+  try {
+    if (id) {
+      await db.collection('liveClasses').doc(id).update(data);
+      toast('✅ Clase actualizada.','success');
+    } else {
+      data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+      await db.collection('liveClasses').add(data);
+      toast('✅ Clase creada correctamente.','success');
+    }
+    navigate('live-classes');
+  } catch(e) {
+    toast('❌ Error: ' + e.message,'error');
+  }
+}
+
+async function editClass(id) {
+  const doc = await db.collection('liveClasses').doc(id).get();
+  if (doc.exists) navigate('new-class', { id, data: { id, ...doc.data() } });
+}
+
+async function deleteClass(id) {
+  if (!confirm('¿Eliminar esta clase y todos sus registros de asistencia?')) return;
+  const batch = db.batch();
+  const attSnap = await db.collection('senceAttendance').where('classId','==',id).get();
+  attSnap.docs.forEach(d => batch.delete(d.ref));
+  batch.delete(db.collection('liveClasses').doc(id));
+  await batch.commit();
+  toast('🗑️ Clase eliminada.','success');
+  navigate('live-classes');
+}
+
+async function toggleClassStatus(id, current) {
+  const newStatus = current === 'active' ? 'finished' : 'active';
+  await db.collection('liveClasses').doc(id).update({ status: newStatus });
+  toast(`✅ Clase ${newStatus==='active'?'iniciada en vivo':'finalizada'}.`,'success');
+  navigate('live-classes');
+}
+
+/* ════════════════════════════════════════════════
+   VISTA: SALA DE CLASE (ALUMNO) - usa Worker
+════════════════════════════════════════════════ */
+async function renderClassRoom(mc, params={}) {
+  const classId = params.id;
+  if (!classId) { mc.innerHTML='<div class="empty-state"><div class="icon">❌</div><p>Clase no encontrada.</p></div>'; return; }
+
+  const doc = await db.collection('liveClasses').doc(classId).get();
+  if (!doc.exists) { mc.innerHTML='<div class="empty-state"><div class="icon">❌</div><p>Clase no encontrada.</p></div>'; return; }
+  const cls = doc.data();
+
+  const attSnap = await db.collection('senceAttendance')
+    .where('classId','==',classId)
+    .where('userId','==',currentUser.uid)
+    .limit(1).get();
+  const att = attSnap.empty ? null : { id: attSnap.docs[0].id, ...attSnap.docs[0].data() };
+
+  const sessionOpen = att?.sessionOpen === true;
+  const sesionSence = att?.idSesionSence || '';
+  const sesionAlumno = att?.idSesionAlumno || '';
+
+  let videoEmbed = '';
+  if (cls.videoUrl) {
+    let embedUrl = cls.videoUrl;
+    if (cls.videoType === 'youtube') {
+      const ytMatch = cls.videoUrl.match(/(?:v=|youtu\.be\/)([^&?]+)/);
+      if (ytMatch) embedUrl = `https://www.youtube.com/embed/${ytMatch[1]}?autoplay=0`;
+    } else if (cls.videoType === 'jitsi') {
+      if (cls.jitsiRoom) embedUrl = `https://meet.jit.si/${encodeURIComponent(cls.jitsiRoom)}#config.startWithAudioMuted=false`;
+    }
+    videoEmbed = `<iframe class="video-frame" src="${escHtml(embedUrl)}" allow="camera;microphone;fullscreen;display-capture;autoplay" allowfullscreen></iframe>`;
+  } else {
+    videoEmbed = `<div class="video-placeholder"><div class="icon">📡</div><p>El enlace de videoconferencia aún no está disponible.</p></div>`;
+  }
+
+  mc.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h2>${escHtml(cls.title)}</h2>
+        <div class="breadcrumb"><a onclick="navigate('live-classes')">Clases en Vivo</a> › ${escHtml(cls.title)}</div>
+      </div>
+      ${cls.status==='active' ? '<span class="badge badge-live">🔴 EN VIVO</span>' : ''}
+    </div>
+
+    ${sessionOpen ? `
+    <div class="session-timer" id="sessionTimerBox">
+      <div>
+        <div class="timer-label">Tiempo de Sesión Activa</div>
+        <div class="timer-display" id="timerDisplay">00:00:00</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px;">
+          ⚠️ Aviso 10 min antes del fin de clase
+        </div>
+      </div>
+      <div class="text-right">
+        <div class="timer-label">Duración Total</div>
+        <div style="font-size:22px;font-family:'DM Mono';color:var(--green-100);">${cls.duration||60} min</div>
+      </div>
+    </div>` : ''}
+
+    <div class="sence-panel">
+      <div class="sence-panel-header">
+        <span style="font-size:18px">🇨🇱</span>
+        <h4>Registro de Asistencia SENCE — ClaveÚnica</h4>
+        <div style="margin-left:auto">
+          <span class="sence-badge ${sessionOpen?'':'sence-badge-red'}">
+            ${sessionOpen ? '🟢 SESIÓN ABIERTA' : '🔴 SIN SESIÓN'}
+          </span>
+        </div>
+      </div>
+      <div class="sence-panel-body">
+
+        <div class="sence-info-grid">
+          <div class="sence-info-item"><label>CodSENCE</label><span>${escHtml(cls.codSence||'—')}</span></div>
+          <div class="sence-info-item"><label>Código Curso</label><span>${escHtml(cls.codigoCurso||'—')}</span></div>
+          <div class="sence-info-item"><label>Tu RUN</label><span id="userRunDisplay">Ingresa tu RUN →</span></div>
+          <div class="sence-info-item"><label>Estado Sesión</label><span>${sessionOpen ? '✅ Abierta' : '⛔ Cerrada'}</span></div>
+        </div>
+
+        ${!sessionOpen ? `
+        <div id="runInputSection">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Tu RUN (sin puntos, con guión) *</label>
+              <input type="text" id="alumnoRun" placeholder="Ej: 12345678-9" maxlength="12"
+                     style="font-family:'DM Mono',monospace;font-size:16px;letter-spacing:1px"
+                     value="${escHtml(att?.runAlumno||'')}">
+              <small>Ingresa el mismo RUN con que tienes ClaveÚnica en SENCE.</small>
+            </div>
+          </div>
+          <div class="attendance-status pending">
+            <div class="attendance-dot dot-orange"></div>
+            <div><strong>Paso 1:</strong> Haz clic en "Iniciar Sesión SENCE" e ingresa tu ClaveÚnica para registrar tu asistencia.</div>
+          </div>
+          <button class="btn btn-sence" onclick="iniciarSesionSence('${classId}')">
+            🇨🇱 Iniciar Sesión SENCE con ClaveÚnica
+          </button>
+        </div>` : `
+        <div class="attendance-status open">
+          <div class="attendance-dot dot-green"></div>
+          <div><strong>✅ Sesión registrada.</strong> Tu asistencia está siendo contabilizada. Cierra sesión al terminar la clase.</div>
+        </div>
+        <div style="margin-bottom:12px">
+          <small style="font-size:11.5px;color:var(--text-light)">
+            ID Sesión SENCE: <span style="font-family:'DM Mono'">${escHtml(sesionSence||'—')}</span> |
+            Inicio: ${att?.inicioSesion ? fmtDateTime(att.inicioSesion) : '—'}
+          </small>
+        </div>
+        <button class="btn btn-danger" onclick="cerrarSesionSence('${classId}','${escHtml(sesionSence)}','${escHtml(sesionAlumno)}')">
+          🚪 Cerrar Sesión SENCE (al terminar la clase)
+        </button>`}
+      </div>
+    </div>
+
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="video-room" id="videoRoom">
+        ${videoEmbed}
+      </div>
+    </div>
+
+    ${cls.videoType !== 'jitsi' && cls.videoUrl ? `
+    <div class="card">
+      <div class="card-header"><h3>🔗 Enlace Directo</h3></div>
+      <p style="font-size:13px;color:var(--text-mid);margin-bottom:12px;">Si el video no carga correctamente, únete directamente:</p>
+      <a href="${escHtml(cls.videoUrl)}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">
+        Abrir Videoconferencia en Nueva Pestaña ↗
+      </a>
+    </div>` : ''}
+
+    ${currentRole==='admin' ? `
+    <div class="card">
+      <div class="card-header"><h3>👥 Asistencia en Tiempo Real</h3></div>
+      <div id="rtAttendance"><div class="empty-state"><div class="icon">⏳</div><p>Cargando...</p></div></div>
+    </div>` : ''}`;
+
+  if (sessionOpen && att?.inicioSesion) {
+    startTimer(att.inicioSesion.toDate(), cls.duration || 60);
+  }
+
+  if (currentRole === 'admin') {
+    loadRealTimeAttendance(classId);
+  }
+
+  if (att?.runAlumno) {
+    const runDisplay = document.getElementById('userRunDisplay');
+    if (runDisplay) runDisplay.textContent = att.runAlumno;
+  }
+}
+
+function startTimer(startDate, durationMin) {
+  if (sessionTimer) clearInterval(sessionTimer);
+  const box = document.getElementById('sessionTimerBox');
+
+  sessionTimer = setInterval(() => {
+    const now     = new Date();
+    const elapsed = Math.floor((now - startDate) / 1000);
+    const hrs  = Math.floor(elapsed / 3600);
+    const mins = Math.floor((elapsed % 3600) / 60);
+    const secs = elapsed % 60;
+    const display = document.getElementById('timerDisplay');
+    if (display) {
+      display.textContent = `${String(hrs).padStart(2,'0')}:${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+    }
+    if (box) {
+      const remaining = durationMin * 60 - elapsed;
+      box.className = 'session-timer';
+      if (remaining <= 0)  box.classList.add('timer-danger');
+      else if (remaining <= 600) {
+        box.classList.add('timer-warning');
+        if (remaining === 600) toast('⚠️ Quedan 10 minutos de clase. Recuerda cerrar sesión SENCE al terminar.','warning',8000);
+      }
+    }
+  }, 1000);
+}
+
+async function loadRealTimeAttendance(classId) {
+  const cont = document.getElementById('rtAttendance');
+  if (!cont) return;
+  try {
+    const snap = await db.collection('senceAttendance').where('classId','==',classId).get();
+    if (snap.empty) { cont.innerHTML='<div class="empty-state"><div class="icon">👥</div><p>Sin registros aún.</p></div>'; return; }
+    cont.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Alumno</th><th>RUN</th><th>Inicio Sesión SENCE</th><th>Cierre Sesión SENCE</th><th>Estado</th></tr></thead>
+          <tbody>
+            ${snap.docs.map(d => {
+              const a = d.data();
+              return `<tr class="participant-row">
+                <td><div style="display:flex;align-items:center;gap:8px">
+                  <div class="participant-avatar">${(a.userName||'?').slice(0,2).toUpperCase()}</div>
+                  ${escHtml(a.userName||a.userId||'—')}
+                </div></td>
+                <td><span style="font-family:'DM Mono'">${escHtml(a.runAlumno||'—')}</span></td>
+                <td>${fmtDateTime(a.inicioSesion)}</td>
+                <td>${a.cierreSesion ? fmtDateTime(a.cierreSesion) : '<span class="badge badge-live">Activa</span>'}</td>
+                <td><span class="badge ${a.sessionOpen?'badge-green':'badge-gray'}">${a.sessionOpen?'✅ Abierta':'🏁 Cerrada'}</span></td>
+                </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    cont.innerHTML = `<p style="color:var(--danger)">${e.message}</p>`;
+  }
+}
+
+/* ════════════════════════════════════════════════
+   INTEGRACIÓN SENCE — INICIO DE SESIÓN (usa Worker)
+════════════════════════════════════════════════ */
+async function iniciarSesionSence(classId) {
+  const runInput = document.getElementById('alumnoRun');
+  const run = runInput ? runInput.value.trim() : '';
+  if (!run || !/^\d{7,8}-[\dkK]$/.test(run)) {
+    return toast('⚠️ Ingresa un RUN válido (Ej: 12345678-9).','warning');
+  }
+
+  const cls = (await db.collection('liveClasses').doc(classId).get()).data();
+  if (!cls) return toast('❌ Error: clase no encontrada.','error');
+
+  const idSesionAlumno = genSessionId();
+  const userName = currentUser.displayName || currentUser.email.split('@')[0];
+
+  try {
+    const existing = await db.collection('senceAttendance')
+      .where('classId','==',classId).where('userId','==',currentUser.uid).limit(1).get();
+
+    const attData = {
+      classId, classTitle: cls.title,
+      userId: currentUser.uid, userEmail: currentUser.email, userName,
+      runAlumno: run,
+      codSence: cls.codSence, codigoCurso: cls.codigoCurso,
+      lineaCapacitacion: cls.lineaCapacitacion || 3,
+      idSesionAlumno,
+      idSesionSence: '',
+      sessionOpen: false,
+      inicioSesion: null,
+      cierreSesion: null,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
+
+    let attDocId;
+    if (!existing.empty) {
+      attDocId = existing.docs[0].id;
+      await db.collection('senceAttendance').doc(attDocId).update(attData);
+    } else {
+      attData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+      const ref = await db.collection('senceAttendance').add(attData);
+      attDocId = ref.id;
+    }
+
+    sessionStorage.setItem('sence_pending', JSON.stringify({
+      classId, attDocId, idSesionAlumno, userId: currentUser.uid
+    }));
+
+    const retornaUrl = `${WORKER_URL}/api/sence/retorno`;
+    const errorUrl   = `${WORKER_URL}/api/sence/retorno?error=1`;
+
+    const response = await fetch(`${WORKER_URL}/api/sence/iniciar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        codSence: cls.codSence,
+        codigoCurso: cls.codigoCurso,
+        runAlumno: run,
+        idSesionAlumno,
+        lineaCapacitacion: cls.lineaCapacitacion || 3,
+        urlRetoma: retornaUrl,
+        urlError: errorUrl,
+      })
+    });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const html = await response.text();
+    document.open();
+    document.write(html);
+    document.close();
+  } catch (err) {
+    toast('❌ Error al conectar con SENCE: ' + err.message, 'error');
+  }
+}
+
+/* ════════════════════════════════════════════════
+   INTEGRACIÓN SENCE — CIERRE DE SESIÓN (usa Worker)
+════════════════════════════════════════════════ */
+async function cerrarSesionSence(classId, idSesionSence, idSesionAlumno) {
+  if (!confirm('¿Confirmas cerrar tu sesión SENCE? Esto registrará tu asistencia definitivamente.')) return;
+
+  const cls = (await db.collection('liveClasses').doc(classId).get()).data();
+  if (!cls) return toast('❌ Clase no encontrada.','error');
+
+  const attSnap = await db.collection('senceAttendance')
+    .where('classId','==',classId).where('userId','==',currentUser.uid).limit(1).get();
+  if (attSnap.empty) return toast('⚠️ No tienes sesión activa para cerrar.','warning');
+  const att = { id: attSnap.docs[0].id, ...attSnap.docs[0].data() };
+  const run = att.runAlumno;
+
+  sessionStorage.setItem('sence_pending_close', JSON.stringify({
+    classId, attDocId: att.id, userId: currentUser.uid
+  }));
+
+  const retornaUrl = `${WORKER_URL}/api/sence/retorno?close=1`;
+  const errorUrl   = `${WORKER_URL}/api/sence/retorno?close=1&error=1`;
+
+  try {
+    const response = await fetch(`${WORKER_URL}/api/sence/cerrar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        codSence: cls.codSence,
+        codigoCurso: cls.codigoCurso,
+        runAlumno: run,
+        idSesionAlumno: idSesionAlumno || att.idSesionAlumno,
+        idSesionSence: idSesionSence || att.idSesionSence,
+        lineaCapacitacion: cls.lineaCapacitacion || 3,
+        urlRetoma: retornaUrl,
+        urlError: errorUrl,
+      })
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const html = await response.text();
+    document.open();
+    document.write(html);
+    document.close();
+  } catch (err) {
+    toast('❌ Error al cerrar sesión SENCE: ' + err.message, 'error');
+  }
+}
+
+/* ════════════════════════════════════════════════
+   MANEJAR RETORNO DE SENCE (desde el Worker)
+════════════════════════════════════════════════ */
+async function handleSenceReturn() {
+  const params = new URLSearchParams(window.location.search);
+  const retorno = params.get('sence_retorno');
+  if (!retorno) return;
+
+  const idSesionSence = params.get('idSesionSence') || '';
+  const idSesionAlumno = params.get('idSesionAlumno') || '';
+
+  window.history.replaceState({}, '', window.location.pathname);
+
+  if (retorno === 'ok') {
+    const pending = JSON.parse(sessionStorage.getItem('sence_pending') || 'null');
+    sessionStorage.removeItem('sence_pending');
+    if (pending) {
+      try {
+        await db.collection('senceAttendance').doc(pending.attDocId).update({
+          sessionOpen: true,
+          inicioSesion: firebase.firestore.FieldValue.serverTimestamp(),
+          idSesionSence: idSesionSence,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        toast('✅ ¡Sesión SENCE iniciada! Tu asistencia está siendo registrada.','success',6000);
+        if (currentView === 'class-room') {
+          const classId = pending.classId;
+          renderClassRoom(document.getElementById('mainContent'), { id: classId });
+        }
+      } catch(e) {
+        toast('⚠️ Error al guardar: ' + e.message,'warning');
+      }
+    }
+  } else if (retorno === 'close_ok') {
+    const pending = JSON.parse(sessionStorage.getItem('sence_pending_close') || 'null');
+    sessionStorage.removeItem('sence_pending_close');
+    if (pending) {
+      try {
+        await db.collection('senceAttendance').doc(pending.attDocId).update({
+          sessionOpen: false,
+          cierreSesion: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        toast('🏁 Sesión SENCE cerrada correctamente.','success',6000);
+        if (currentView === 'class-room') {
+          const classId = pending.classId;
+          renderClassRoom(document.getElementById('mainContent'), { id: classId });
+        }
+      } catch(e) {
+        toast('⚠️ Error al guardar cierre: ' + e.message,'warning');
+      }
+    }
+  } else if (retorno === 'error') {
+    sessionStorage.removeItem('sence_pending');
+    sessionStorage.removeItem('sence_pending_close');
+    toast('❌ Error en el proceso SENCE. Verifica tu ClaveÚnica e intenta de nuevo.','error',8000);
+  }
+}
+
+/* ════════════════════════════════════════════════
+   VISTA: ASISTENCIA ADMIN
+════════════════════════════════════════════════ */
+async function renderAttendance(mc) {
+  mc.innerHTML = `
+    <div class="page-header">
+      <div><h2>👥 Registro de Asistencia</h2><div class="breadcrumb">Control de presencia y sesiones SENCE</div></div>
+      <button class="btn btn-secondary" onclick="exportAttendance()">📥 Exportar CSV</button>
+    </div>
+    <div id="attContainer"><div class="empty-state"><div class="icon">⏳</div><p>Cargando...</p></div></div>`;
+
+  try {
+    const snap = await db.collection('senceAttendance').orderBy('createdAt','desc').limit(200).get();
+    const cont = document.getElementById('attContainer');
+    if (snap.empty) { cont.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>Sin registros de asistencia.</p></div>'; return; }
+
+    cont.innerHTML = `
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Alumno</th><th>RUN</th><th>Clase</th><th>Inicio SENCE</th><th>Cierre SENCE</th><th>ID Sesión SENCE</th><th>Estado</th></tr>
+            </thead>
+            <tbody>
+              ${snap.docs.map(d => {
+                const a = d.data();
+                return `<tr>
+                  <td>${escHtml(a.userName||a.userEmail||'—')}</td>
+                  <td><span style="font-family:'DM Mono';font-size:12px">${escHtml(a.runAlumno||'—')}</span></td>
+                  <td>${escHtml(a.classTitle||'—')}</td>
+                  <td style="font-size:12px">${fmtDateTime(a.inicioSesion)}</td>
+                  <td style="font-size:12px">${a.cierreSesion ? fmtDateTime(a.cierreSesion) : '<span class="badge badge-live">Activa</span>'}</td>
+                  <td><span style="font-family:'DM Mono';font-size:11px;color:var(--text-light)">${escHtml((a.idSesionSence||'—').slice(0,20))}${a.idSesionSence&&a.idSesionSence.length>20?'…':''}</span></td>
+                  <td><span class="badge ${a.sessionOpen?'badge-green':'badge-gray'}">${a.sessionOpen?'Abierta':'Cerrada'}</span></td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+  } catch(e) {
+    document.getElementById('attContainer').innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>${e.message}</p></div>`;
+  }
+}
+
+async function exportAttendance() {
+  const snap = await db.collection('senceAttendance').orderBy('createdAt','desc').get();
+  const rows = [['Alumno','Email','RUN','Clase','CodSENCE','CodigoCurso','Inicio SENCE','Cierre SENCE','ID Sesión SENCE','Estado']];
+  snap.docs.forEach(d => {
+    const a = d.data();
+    rows.push([
+      a.userName||'', a.userEmail||'', a.runAlumno||'', a.classTitle||'',
+      a.codSence||'', a.codigoCurso||'',
+      a.inicioSesion ? fmtDateTime(a.inicioSesion) : '',
+      a.cierreSesion ? fmtDateTime(a.cierreSesion) : '',
+      a.idSesionSence||'',
+      a.sessionOpen ? 'Abierta' : 'Cerrada'
+    ]);
+  });
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent('\uFEFF' + csv);
+  a.download = `asistencia_sence_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  toast('📥 CSV exportado.','success');
+}
+
+/* ════════════════════════════════════════════════
+   VISTA: REGISTRO SENCE CORREGIDA
+════════════════════════════════════════════════ */
+async function renderSenceLog(mc) {
+  mc.innerHTML = `
+    <div class="page-header">
+      <div><h2>📋 Registros SENCE</h2><div class="breadcrumb">Historial de sesiones enviadas a SENCE</div></div>
+    </div>
+    <div class="sence-panel" style="margin-bottom:20px">
+      <div class="sence-panel-header"><span>ℹ️</span><h4>Información de Integración</h4></div>
+      <div class="sence-panel-body">
+        <div class="sence-info-grid">
+          <div class="sence-info-item"><label>Worker URL</label><span>${WORKER_URL}</span></div>
+          <div class="sence-info-item"><label>Ambiente</label><span id="senceModeLabel">Cargando...</span></div>
+        </div>
+        <p style="font-size:12.5px;color:var(--text-mid);margin-top:8px">
+          💡 Los tokens y credenciales están protegidos en Cloudflare Worker. Los registros finales se almacenan localmente en Firestore.
+        </p>
+      </div>
+    </div>
+    <div id="senceLogTableContainer">
+      <div class="empty-state"><div class="icon">⏳</div><p>Cargando registros...</p></div>
+    </div>`;
+
+  try {
+    const res = await fetch(`${WORKER_URL}/api/sence/modo`);
+    if (res.ok) {
+      const data = await res.json();
+      const modeSpan = document.getElementById('senceModeLabel');
+      if (modeSpan) modeSpan.textContent = data.testMode ? '⚠️ TEST' : '✅ PRODUCCIÓN';
+    } else {
+      document.getElementById('senceModeLabel').textContent = 'Error al consultar';
+    }
+  } catch (e) {
+    document.getElementById('senceModeLabel').textContent = 'Error al consultar';
+  }
+
+  await cargarTablaAsistencia();
+}
+
+async function cargarTablaAsistencia() {
+  const container = document.getElementById('senceLogTableContainer');
+  if (!container) return;
+
+  try {
+    const snap = await db.collection('senceAttendance').orderBy('createdAt', 'desc').limit(200).get();
+    if (snap.empty) {
+      container.innerHTML = '<div class="empty-state"><div class="icon">📭</div><p>Sin registros de asistencia.</p></div>';
+      return;
+    }
+
+    let html = `
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Alumno</th><th>RUN</th><th>Clase</th><th>Inicio SENCE</th><th>Cierre SENCE</th><th>ID Sesión SENCE</th><th>Estado</th></tr>
+            </thead>
+            <tbody>`;
+
+    snap.docs.forEach(doc => {
+      const a = doc.data();
+      html += `
+        <tr>
+          <td>${escHtml(a.userName || a.userEmail || '—')}</td>
+          <td><span style="font-family:'DM Mono';font-size:12px">${escHtml(a.runAlumno || '—')}</span></td>
+          <td>${escHtml(a.classTitle || '—')}</td>
+          <td style="font-size:12px">${fmtDateTime(a.inicioSesion)}</td>
+          <td style="font-size:12px">${a.cierreSesion ? fmtDateTime(a.cierreSesion) : '<span class="badge badge-live">Activa</span>'}</td>
+          <td><span style="font-family:'DM Mono';font-size:11px;color:var(--text-light)">${escHtml((a.idSesionSence || '—').slice(0, 20))}${a.idSesionSence && a.idSesionSence.length > 20 ? '…' : ''}</span></td>
+          <td><span class="badge ${a.sessionOpen ? 'badge-green' : 'badge-gray'}">${a.sessionOpen ? 'Abierta' : 'Cerrada'}</span></td>
+        </tr>`;
+    });
+
+    html += `</tbody></table></div></div>`;
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>Error al cargar: ${e.message}</p></div>`;
+    console.error(e);
+  }
+}
+
+/* ════════════════════════════════════════════════
+   VISTA: CONFIG SENCE
+════════════════════════════════════════════════ */
+function renderSenceConfig(mc) {
+  mc.innerHTML = `
+    <div class="page-header">
+      <div><h2>⚙️ Configuración SENCE</h2><div class="breadcrumb">Integración segura vía Cloudflare Worker</div></div>
+    </div>
+
+    <div class="sence-panel" style="margin-bottom:20px">
+      <div class="sence-panel-header"><span>🔑</span><h4>Credenciales del OTEC</h4></div>
+      <div class="sence-panel-body">
+        <p style="font-size:13px;color:var(--text-mid);margin-bottom:16px">
+          Las credenciales (<strong>RUT OTEC, Token</strong>) <span style="background:#ffe0b3;padding:2px 6px;border-radius:4px;">no están expuestas en el frontend</span>.
+          Se configuran como variables secretas en el Cloudflare Worker.
+        </p>
+        <div class="sence-info-grid">
+          <div class="sence-info-item"><label>Worker URL</label><span>${WORKER_URL}</span></div>
+          <div class="sence-info-item"><label>Modo actual</label><span id="senceModeDisplay">—</span></div>
+        </div>
+        <p style="font-size:12.5px;color:var(--text-mid);margin-top:12px">
+          ✅ Para cambiar credenciales o modo Test/Producción, edita las variables de entorno en Cloudflare Workers.
+        </p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><h3>📖 Pasos para Configurar (una sola vez)</h3></div>
+      <ol style="padding-left:20px;line-height:2.2;font-size:14px;color:var(--text-mid)">
+        <li>Obtén tu Token en <a href="https://sistemas.sence.cl/rts" target="_blank" style="color:var(--primary)">sistemas.sence.cl/rts</a>.</li>
+        <li>Despliega el Worker de Cloudflare (código incluido en la documentación).</li>
+        <li>Configura las variables secretas: <code>SENCE_RUT_OTEC</code>, <code>SENCE_TOKEN_OTEC</code>, <code>SENCE_TEST_MODE</code>, <code>FRONTEND_URL</code>.</li>
+        <li>Actualiza la constante <code>WORKER_URL</code> en este archivo HTML.</li>
+        <li>En cada clase, ingresa el <strong>CodSence</strong> y <strong>CodigoCurso</strong> desde SIC Administrativo.</li>
+        <li>Los alumnos necesitan su <strong>RUN</strong> (sin puntos, con guión) y <strong>ClaveÚnica</strong> activa.</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><h3>⚠️ Consideraciones Importantes</h3></div>
+      <ul style="padding-left:20px;line-height:2.2;font-size:14px;color:var(--text-mid)">
+        <li>El <strong>Token SENCE</strong> nunca se envía al cliente; se guarda como secreto en el Worker.</li>
+        <li>El código SENCE debe tener mínimo <strong>10 caracteres</strong> y el código curso <strong>7 caracteres</strong>.</li>
+        <li>En <strong>Ambiente Test</strong> puedes usar <code>TEST-COD-001</code> y <code>CURSO-01</code>.</li>
+        <li>Los registros en SENCE son <strong>permanentes</strong> en producción.</li>
+        <li>La información aparece en SIC al día siguiente (proceso nocturno).</li>
+      </ul>
+    </div>`;
+
+  fetch(`${WORKER_URL}/api/sence/modo`)
+    .then(res => res.json())
+    .then(data => {
+      const modeSpan = document.getElementById('senceModeDisplay');
+      if (modeSpan) modeSpan.textContent = data.testMode ? '⚠️ TEST' : '✅ PRODUCCIÓN';
+    })
+    .catch(() => {});
+}
+
+/* ════════════════════════════════════════════════
+   VISTA: MIS CURSOS (ALUMNO)
+════════════════════════════════════════════════ */
+async function renderMyCourses(mc) {
+  mc.innerHTML = `
+    <div class="page-header"><div><h2>🎓 Mis Cursos</h2><div class="breadcrumb">Clases disponibles para ti</div></div></div>
+    <div id="myCoursesContainer"><div class="empty-state"><div class="icon">⏳</div><p>Cargando...</p></div></div>`;
+
+  try {
+    const snap = await db.collection('liveClasses').where('status','!=','finished').orderBy('status').get();
+    const cont = document.getElementById('myCoursesContainer');
+    if (snap.empty) { cont.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>No hay clases disponibles por ahora.</p></div>'; return; }
+
+    cont.innerHTML = snap.docs.map(doc => {
+      const c = doc.data();
+      const isLive = c.status === 'active';
+      return `
+        <div class="live-class-card">
+          <div class="live-class-header">
+            <h4>${escHtml(c.title)}</h4>
+            ${isLive ? '<span class="badge badge-live">🔴 EN VIVO AHORA</span>' : '<span class="badge badge-blue">📅 Programada</span>'}
+          </div>
+          <div class="live-class-body">
+            <div class="live-class-meta">
+              <span>📅 ${fmtDateTime(c.scheduledAt)}</span>
+              <span>⏱ ${c.duration||60} min</span>
+              <span>🎓 ${escHtml(c.courseName||'—')}</span>
+            </div>
+            ${c.description ? `<p style="font-size:13px;color:var(--text-mid);margin-bottom:12px">${escHtml(c.description)}</p>` : ''}
+            <div class="live-class-actions">
+              <button class="btn ${isLive?'btn-live':'btn-primary'}" onclick="navigate('class-room',{id:'${doc.id}'})">
+                ${isLive ? '🔴 Entrar a Clase EN VIVO' : '👁️ Ver Clase'}
+              </button>
+            </div>
+            ${isLive ? `<p style="font-size:12px;color:var(--warning);margin-top:8px">⚠️ Recuerda iniciar tu sesión SENCE con ClaveÚnica al entrar.</p>` : ''}
+          </div>
+        </div>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('myCoursesContainer').innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>${e.message}</p></div>`;
+  }
+}
+
+/* ════════════════════════════════════════════════
+   VISTA: MI ASISTENCIA (ALUMNO)
+════════════════════════════════════════════════ */
+async function renderMyAttendance(mc) {
+  mc.innerHTML = `
+    <div class="page-header"><div><h2>📋 Mi Asistencia</h2><div class="breadcrumb">Registro de mis sesiones SENCE</div></div></div>
+    <div id="myAttContainer"><div class="empty-state"><div class="icon">⏳</div><p>Cargando...</p></div></div>`;
+
+  try {
+    const snap = await db.collection('senceAttendance')
+      .where('userId','==',currentUser.uid)
+      .orderBy('createdAt','desc').get();
+    const cont = document.getElementById('myAttContainer');
+    if (snap.empty) { cont.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>Sin registros de asistencia aún.</p></div>'; return; }
+
+    cont.innerHTML = `
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Clase</th><th>Mi RUN</th><th>Inicio SENCE</th><th>Cierre SENCE</th><th>Estado</th></tr></thead>
+            <tbody>
+              ${snap.docs.map(d => {
+                const a = d.data();
+                return `<tr>
+                  <td><strong>${escHtml(a.classTitle||'—')}</strong></td>
+                  <td><span style="font-family:'DM Mono'">${escHtml(a.runAlumno||'—')}</span></td>
+                  <td>${fmtDateTime(a.inicioSesion)}</td>
+                  <td>${a.cierreSesion ? fmtDateTime(a.cierreSesion) : '<span class="badge badge-live">Activa</span>'}</td>
+                  <td><span class="badge ${a.sessionOpen?'badge-green':'badge-gray'}">${a.sessionOpen?'✅ Abierta':'🏁 Cerrada'}</span></td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+  } catch(e) {
+    document.getElementById('myAttContainer').innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>${e.message}</p></div>`;
+  }
+}
+
+/* ════════════════════════════════════════════════
+   INIT
+════════════════════════════════════════════════ */
+window.addEventListener('load', () => {
+  handleSenceReturn();
+});
+
+window.exportAttendance = exportAttendance;
+window.editClass = editClass;
+window.deleteClass = deleteClass;
+window.toggleClassStatus = toggleClassStatus;
+window.saveClass = saveClass;
+window.updateVideoFields = updateVideoFields;
+window.iniciarSesionSence = iniciarSesionSence;
+window.cerrarSesionSence = cerrarSesionSence;
+window.navigate = navigate;
+window.logout = logout;
+window.login = login;
+window.openSidebar = openSidebar;
+window.closeSidebar = closeSidebar;
+</script>
+</body>
+</html>
