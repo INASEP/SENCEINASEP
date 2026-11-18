@@ -878,6 +878,7 @@ const SENCE_GLOSAS = {
   '310': 'El curso está Terminado o Anulado en SENCE.',
   '311': 'El RUN con que ingresaste a ClaveÚnica NO coincide con el RUN informado por tu OTEC.',
   '312': 'No se pudo completar la autenticación con ClaveÚnica.',
+  '313': 'La URL de cierre de sesión es incorrecta. Reporta este código a tu OTEC.',
   'INASEP-404': 'No se encontró tu registro de sesión. Vuelve a la clase e inténtalo de nuevo.',
   'INASEP-RUN': 'El RUN devuelto por SENCE no coincide con tu registro.',
   'INASEP-EXP': 'La respuesta de SENCE llegó fuera de tiempo o duplicada. Revisa el estado de tu sesión.',
@@ -1372,9 +1373,9 @@ async function renderNewClass(mc, params={}) {
         </div>
         <div class="form-row">
           <div class="form-group">
-            <label>Código de Módulo SIC (para el envío de avance) *</label>
+            <label>Código de Módulo SIC (solo Programas Sociales, línea 1)</label>
             <input type="text" id="fc_codigoModulo" value="${escHtml(data?.codigoModulo||'')}" placeholder="Ej: C46982-O565656565-M1" style="font-family:'DM Mono',monospace">
-            <small>Módulo al que pertenece esta clase. SIC Administrativo → Mantenedores → Cursos → Módulos.</small>
+            <small>Obligatorio solo en línea 1: el avance al SIC (API Gestor Intermedio) aplica solo a Programas Sociales. En Franquicia Tributaria (línea 3) déjalo vacío.</small>
           </div>
           <div class="form-group"></div>
         </div>
@@ -1384,6 +1385,7 @@ async function renderNewClass(mc, params={}) {
             <select id="fc_linea">
               <option value="3" ${(data?.lineaCapacitacion||3)==3?'selected':''}>3 — Franquicia Tributaria / Impulsa Personas</option>
               <option value="1" ${(data?.lineaCapacitacion)==1?'selected':''}>1 — Programas Sociales / Becas Laborales (CodSence en blanco)</option>
+              <option value="6" ${(data?.lineaCapacitacion)==6?'selected':''}>6 — FPT</option>
             </select>
           </div>
           <div class="form-group">
@@ -1515,8 +1517,9 @@ async function saveClass(id) {
   const testOk = v => SENCE_CONFIG.TEST_MODE === true && v === '-1';
   if (linea === 3 && !testOk(codSence) && codSence.length !== 10) return toast('⚠️ Línea 3: el CodSence debe tener exactamente 10 caracteres.','warning');
   if (linea === 1 && codSence && !testOk(codSence)) return toast('⚠️ Línea 1 (Programas Sociales): el CodSence debe ir en blanco.','warning');
-  if (!testOk(codigoCurso) && (codigoCurso.length < 7 || codigoCurso.length > 50)) return toast('⚠️ El CodigoCurso debe tener entre 7 y 50 caracteres.','warning');
-  if (!codigoModulo) return toast('⚠️ Indica el Código de Módulo SIC de esta clase (obligatorio para el envío de avance).','warning');
+  const minCurso = linea === 6 ? 1 : 7; // v1.1.6: mínimo 7 caracteres, excepto FPT
+  if (!testOk(codigoCurso) && (codigoCurso.length < minCurso || codigoCurso.length > 50)) return toast(`⚠️ El CodigoCurso debe tener entre ${minCurso} y 50 caracteres.`,'warning');
+  if (linea === 1 && !codigoModulo) return toast('⚠️ Línea 1 (Programas Sociales): indica el Código de Módulo SIC de esta clase.','warning');
 
   const data = {
     title, courseName, description,
@@ -1569,6 +1572,7 @@ async function toggleClassStatus(id, current) {
    VISTA: SALA DE CLASE (ALUMNO)
 ════════════════════════════════════════════════ */
 async function renderClassRoom(mc, params={}) {
+  await loadSenceConfig();
   const classId = params.id;
   if (!classId) { mc.innerHTML='<div class="empty-state"><div class="icon">❌</div><p>Clase no encontrada.</p></div>'; return; }
 
@@ -1657,8 +1661,9 @@ async function renderClassRoom(mc, params={}) {
           <div class="attendance-status pending">
             <div class="attendance-dot dot-orange"></div>
             <div>
-              <strong>Paso 1:</strong> Haz clic en "Iniciar Sesión SENCE". Serás llevado al sitio de SENCE para ingresar con tu <strong>RUN y ClaveÚnica</strong>
-              (<a href="https://claveunica.gob.cl/" target="_blank" rel="noopener">¿olvidaste tu clave? claveunica.gob.cl</a>). Debes usar el mismo RUN registrado en tu perfil: <strong>${escHtml(myRut || '—')}</strong>.
+              <strong>Paso 1:</strong> Haz clic en "Iniciar Sesión SENCE". Serás llevado al sitio de SENCE para ingresar con ${SENCE_CONFIG.TEST_MODE === true
+                ? '<strong>tu RUN y Clave SENCE (CUS)</strong> — <em>ambiente de pruebas</em>'
+                : '<strong>tu RUN y ClaveÚnica</strong> (<a href="https://claveunica.gob.cl/" target="_blank" rel="noopener">¿olvidaste tu clave? claveunica.gob.cl</a>)'}. Debes usar el mismo RUN registrado en tu perfil: <strong>${escHtml(myRut || '—')}</strong>.
               Al terminar volverás automáticamente a esta clase.
             </div>
           </div>
@@ -2547,7 +2552,7 @@ async function crearAlumnoIndividual() {
     toast(`✅ Alumno ${nombre} creado. Contraseña: ${pass}`, 'success', 6000);
     cargarListaAlumnos();
   } catch(e) {
-    if (e.code === 'auth/email-already-in-use') toast('⚠️ Este RUT ya tiene cuenta.','warning');
+    if (e.code === 'auth/email-already-in-use') repararCuentaHuerfana(rut);
     else toast('❌ Error: ' + e.message,'error');
   }
 }
@@ -2571,10 +2576,26 @@ async function resetPasswordAlumno(uid, rut, nombre) {
   }
 }
 
-async function eliminarAlumno(uid, nombre) {
-  if (!confirm(`¿Eliminar al alumno "${nombre}" del sistema? Solo se elimina de Firestore, no de Authentication.`)) return;
+/* Borra Auth + Firestore vía Worker (el navegador no puede borrar la cuenta de acceso de otra persona) */
+async function eliminarUsuarioCompleto(datos) {
+  const res = await workerFetch('/api/admin/eliminar-usuario', { method: 'POST', body: JSON.stringify(datos) });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || ('Error del servidor (' + res.status + ')'));
+  return j;
+}
+/* RUT con cuenta de acceso huérfana (perfil borrado antes, Auth quedó vivo) */
+async function repararCuentaHuerfana(rut) {
+  if (!confirm('Este RUT tiene una cuenta de acceso antigua sin perfil (quedó de una eliminación anterior).\n\n¿Eliminarla para poder crear al usuario de nuevo?')) return;
   try {
-    await db.collection('users').doc(uid).delete();
+    await eliminarUsuarioCompleto({ rut });
+    toast('✅ Cuenta antigua eliminada. Ahora vuelve a presionar "Crear".', 'success', 7000);
+  } catch (e) { toast('❌ ' + e.message, 'error', 8000); }
+}
+
+async function eliminarAlumno(uid, nombre) {
+  if (!confirm(`¿Eliminar al alumno "${nombre}"?\n\nSe borra su perfil y su cuenta de acceso. El historial de asistencia SENCE ya registrado se conserva.`)) return;
+  try {
+    await eliminarUsuarioCompleto({ uid });
     toast(`🗑️ ${nombre} eliminado.`,'success');
     cargarListaAlumnos();
   } catch(e) {
@@ -2594,7 +2615,7 @@ async function renderSenceSIC(mc) {
     <div class="page-header">
       <div>
         <h2>📤 Envío SIC — Avance Alumnos</h2>
-        <div class="breadcrumb">API Gestor Intermedio — Instructivo LMS↔SIC v2.0</div>
+        <div class="breadcrumb">API Gestor Intermedio — Instructivo LMS↔SIC v2.0 · <strong>solo Programas Sociales (línea 1)</strong></div>
       </div>
       <span class="sence-badge">🇨🇱 API Gestor Intermedio</span>
     </div>
@@ -2835,8 +2856,8 @@ async function construirPayloadSIC() {
     db.collection('config').doc('sic').get()
   ]);
   const progPrev = (cfgDoc.exists && cfgDoc.data().progreso) || {};
-  const clases = clsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-  if (!clases.length) { toast(`⚠️ No hay clases con CodigoCurso "${cursoRce}".`, 'warning', 7000); return null; }
+  const clases = clsSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => Number(c.lineaCapacitacion) === 1); // SIC aplica solo a Programas Sociales
+  if (!clases.length) { toast(`⚠️ No hay clases de Programas Sociales (línea 1) con CodigoCurso "${cursoRce}". El envío al SIC no aplica a Franquicia Tributaria.`, 'warning', 9000); return null; }
 
   const codigos = new Set(cfg.modulos.map(m => m.codigo));
   const sinModulo = clases.filter(c => !codigos.has(c.codigoModulo));
@@ -3234,15 +3255,15 @@ async function crearProfesor() {
     toast(`✅ Profesor ${nombre} creado. Contraseña inicial: ${pass}`, 'success', 7000);
     cargarListaProfesores();
   } catch(e) {
-    if (e.code === 'auth/email-already-in-use') toast('⚠️ Este RUT ya tiene cuenta.','warning');
+    if (e.code === 'auth/email-already-in-use') repararCuentaHuerfana(rut);
     else toast('❌ Error: ' + e.message,'error');
   }
 }
 
 async function eliminarProfesor(uid, nombre) {
-  if (!confirm(`¿Eliminar al profesor "${nombre}"? Solo se elimina de Firestore, no de Authentication.`)) return;
+  if (!confirm(`¿Eliminar al profesor "${nombre}"?\n\nSe borra su perfil y su cuenta de acceso.`)) return;
   try {
-    await db.collection('users').doc(uid).delete();
+    await eliminarUsuarioCompleto({ uid });
     toast(`🗑️ ${nombre} eliminado.`,'success');
     cargarListaProfesores();
   } catch(e) {
