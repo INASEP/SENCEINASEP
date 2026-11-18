@@ -1189,13 +1189,15 @@ function genSessionId() {
 async function renderAdminDashboard(mc) {
   try {
     const hoy0 = new Date(); hoy0.setHours(0, 0, 0, 0);
-    const [classSnap, hoySnap, abiertasSnap] = await Promise.all([
-      db.collection('liveClasses').get(),
+    const hoyTs = firebase.firestore.Timestamp.fromDate(hoy0);
+    const [classSnap, activasSnap, hoySnap, abiertasSnap] = await Promise.all([
+      db.collection('liveClasses').where('scheduledAt', '>=', hoyTs).limit(300).get(),
+      db.collection('liveClasses').where('status', '==', 'active').limit(50).get(),
       db.collection('senceAttendance').where('createdAt', '>=', firebase.firestore.Timestamp.fromDate(hoy0)).get(),
       db.collection('senceAttendance').where('sessionOpen', '==', true).get()
     ]);
     const total     = classSnap.size;
-    const active    = classSnap.docs.filter(d=>d.data().status==='active').length;
+    const active    = activasSnap.size;
     const totalAtt  = hoySnap.size;
     const openAtt   = abiertasSnap.size;
     const _banner = bannerSesionesLargas(abiertasSnap.docs);
@@ -1214,7 +1216,7 @@ async function renderAdminDashboard(mc) {
       </div>
 
       <div class="stats-grid">
-        <div class="stat-card"><div class="stat-icon">📹</div><div class="stat-value">${total}</div><div class="stat-label">Total Clases</div></div>
+        <div class="stat-card"><div class="stat-icon">📹</div><div class="stat-value">${total}</div><div class="stat-label">Clases desde hoy</div></div>
         <div class="stat-card"><div class="stat-icon">🔴</div><div class="stat-value">${active}</div><div class="stat-label">En Vivo Ahora</div></div>
         <div class="stat-card"><div class="stat-icon">✅</div><div class="stat-value">${totalAtt}</div><div class="stat-label">Registros SENCE hoy</div></div>
         <div class="stat-card"><div class="stat-icon">🟢</div><div class="stat-value">${openAtt}</div><div class="stat-label">Sesiones Abiertas</div></div>
@@ -1261,6 +1263,8 @@ async function renderAdminDashboard(mc) {
 /* ════════════════════════════════════════════════
    VISTA: CLASES EN VIVO
 ════════════════════════════════════════════════ */
+let _clasesDias = 7;
+function verClasesAnteriores() { _clasesDias += 60; renderLiveClasses(document.getElementById('mainContent')); }
 async function renderLiveClasses(mc) {
   mc.innerHTML = `
     <div class="page-header">
@@ -1270,7 +1274,8 @@ async function renderLiveClasses(mc) {
     <div id="classesContainer"><div class="empty-state"><div class="icon">⏳</div><p>Cargando clases...</p></div></div>`;
 
   try {
-    const snapAll = await db.collection('liveClasses').orderBy('scheduledAt','desc').get();
+    const desde = new Date(); desde.setHours(0,0,0,0); desde.setDate(desde.getDate() - _clasesDias);
+    const snapAll = await db.collection('liveClasses').where('scheduledAt','>=',firebase.firestore.Timestamp.fromDate(desde)).orderBy('scheduledAt','desc').limit(300).get();
     const mats = currentRole === 'student' ? await cargarMisMatriculas() : null;
     const snap = { docs: snapAll.docs.filter(d => puedeVerClase(d.data(), mats)) };
     snap.empty = snap.docs.length === 0;
@@ -1320,7 +1325,7 @@ async function renderLiveClasses(mc) {
             <div class="live-class-actions">${btn}</div>
           </div>
         </div>`;
-    }).join('');
+    }).join('') + `<div style="text-align:center;margin:14px 0"><button class="btn btn-secondary" onclick="verClasesAnteriores()">📂 Ver clases anteriores (mostrando desde hace ${_clasesDias} días)</button></div>`;
   } catch(e) {
     document.getElementById('classesContainer').innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>${e.message}</p></div>`;
   }
@@ -1942,54 +1947,104 @@ function handleSenceReturn() {
 /* ════════════════════════════════════════════════
    VISTA: ASISTENCIA ADMIN
 ════════════════════════════════════════════════ */
+let _attDocs = [], _attCursor = null, _attMas = false;
+function _attRango() {
+  const d = document.getElementById('att_desde')?.value, h = document.getElementById('att_hasta')?.value;
+  const desde = d ? new Date(d + 'T00:00:00') : new Date(new Date().setHours(0,0,0,0));
+  const hasta = h ? new Date(h + 'T23:59:59') : new Date(new Date().setHours(23,59,59,999));
+  return [firebase.firestore.Timestamp.fromDate(desde), firebase.firestore.Timestamp.fromDate(hasta)];
+}
 async function renderAttendance(mc) {
+  const hoy = fechaChile();
   mc.innerHTML = `
     <div class="page-header">
       <div><h2>👥 Registro de Asistencia</h2><div class="breadcrumb">Control de presencia y sesiones SENCE</div></div>
       <div class="flex gap-2 flex-wrap">
+        <button class="btn btn-danger" onclick="limpiarPendientesAtt()">🗑️ Limpiar sin completar</button>
         <button class="btn btn-warning" onclick="cerrarSesionesHuerfanas()">🧹 Cerrar Sesiones Huérfanas</button>
         <button class="btn btn-info" onclick="abrirInformeCurso()">📊 Informe por curso</button>
         <button class="btn btn-secondary" onclick="exportAttendance()">📥 Exportar CSV</button>
       </div>
     </div>
+    <div class="card"><div class="form-row">
+      <div class="form-group"><label>Desde</label><input type="date" id="att_desde" value="${hoy}"></div>
+      <div class="form-group"><label>Hasta</label><input type="date" id="att_hasta" value="${hoy}"></div>
+      <div class="form-group" style="align-self:end"><button class="btn btn-primary" onclick="cargarAsistencia(true)">🔍 Buscar</button></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Curso</label><select id="att_curso" onchange="pintarAsistencia()"><option value="">Todos</option></select></div>
+      <div class="form-group"><label>Estado</label><select id="att_estado" onchange="pintarAsistencia()">
+        <option value="">Todos</option><option value="abierta">Abiertas</option><option value="cerrada">Cerradas</option><option value="pendiente">Sin completar</option><option value="error">Con error</option></select></div>
+      <div class="form-group"><label>Buscar alumno / RUN</label><input type="text" id="att_q" oninput="pintarAsistencia()" placeholder="Nombre o RUN"></div>
+    </div></div>
     <div id="attContainer"><div class="empty-state"><div class="icon">⏳</div><p>Cargando...</p></div></div>`;
-
+  cargarAsistencia(true);
+}
+async function cargarAsistencia(reset) {
   try {
-    const snap = await db.collection('senceAttendance').orderBy('createdAt','desc').limit(200).get();
-    const cont = document.getElementById('attContainer');
-    if (snap.empty) { cont.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>Sin registros de asistencia.</p></div>'; return; }
-
-    cont.innerHTML = `
-      <div class="card">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Alumno</th><th>RUN</th><th>Clase</th>
-                <th>Inicio SENCE</th><th>Cierre SENCE</th>
-                <th>ID Sesión SENCE</th><th>Estado</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${snap.docs.map(d => {
-                const a = d.data();
-                return `<tr>
-                  <td>${escHtml(a.userName||a.userEmail||'—')}</td>
-                  <td><span style="font-family:'DM Mono';font-size:12px">${escHtml(a.runAlumno||'—')}</span></td>
-                  <td>${escHtml(a.classTitle||'—')}</td>
-                  <td style="font-size:12px">${fmtDateTime(a.inicioSesion)}</td>
-                  <td style="font-size:12px">${a.cierreSesion ? fmtDateTime(a.cierreSesion) : '<span class="badge badge-live">Activa</span>'}</td>
-                  <td><span style="font-family:'DM Mono';font-size:11px;color:var(--text-light)">${escHtml((a.idSesionSence||'—').slice(0,20))}${a.idSesionSence&&a.idSesionSence.length>20?'…':''}</span></td>
-                  <td>${estadoBadge(a)}</td>
-                </tr>`;
-              }).join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>`;
-  } catch(e) {
-    document.getElementById('attContainer').innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>${e.message}</p></div>`;
+    if (reset) { _attDocs = []; _attCursor = null; }
+    const [d, h] = _attRango();
+    let q = db.collection('senceAttendance').where('createdAt', '>=', d).where('createdAt', '<=', h).orderBy('createdAt', 'desc').limit(100);
+    if (_attCursor) q = q.startAfter(_attCursor);
+    const snap = await q.get();
+    _attDocs = _attDocs.concat(snap.docs);
+    _attCursor = snap.docs[snap.docs.length - 1] || _attCursor;
+    _attMas = snap.size === 100;
+    const sel = document.getElementById('att_curso'), prev = sel.value;
+    const cursos = new Map();
+    _attDocs.forEach(x => { const a = x.data(); if (a.cursoId) cursos.set(a.cursoId, a.courseName || a.cursoId); });
+    sel.innerHTML = '<option value="">Todos</option>' + [...cursos].map(([id, n]) => `<option value="${escHtml(id)}">${escHtml(n)}</option>`).join('') + '<option value="__none">Sin curso (antiguos)</option>';
+    sel.value = prev;
+    pintarAsistencia();
+  } catch (e) {
+    document.getElementById('attContainer').innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>${escHtml(e.message)}</p></div>`;
   }
+}
+function _attFiltrados() {
+  const cu = document.getElementById('att_curso')?.value || '', es = document.getElementById('att_estado')?.value || '';
+  const q = normTxt(document.getElementById('att_q')?.value || '');
+  return _attDocs.filter(d => {
+    const a = d.data();
+    if (cu === '__none' ? a.cursoId : (cu && a.cursoId !== cu)) return false;
+    if (es && (a.sessionOpen ? 'abierta' : (a.estadoSesion || 'cerrada')) !== es) return false;
+    if (q && !normTxt((a.userName || '') + ' ' + (a.runAlumno || '')).includes(q)) return false;
+    return true;
+  });
+}
+function pintarAsistencia() {
+  const cont = document.getElementById('attContainer'); if (!cont) return;
+  const docs = _attFiltrados();
+  if (!docs.length) { cont.innerHTML = `<div class="empty-state"><div class="icon">📭</div><p>Sin registros con estos filtros en el rango de fechas.</p></div>${_attMas ? '<div style="text-align:center"><button class="btn btn-secondary" onclick="cargarAsistencia(false)">⬇️ Cargar más</button></div>' : ''}`; return; }
+  cont.innerHTML = `<div class="card"><div style="font-size:13px;color:var(--text-light);margin-bottom:8px">${docs.length} registro(s) mostrados · ${_attDocs.length} cargados</div><div class="table-wrap"><table>
+    <thead><tr><th>Alumno</th><th>RUN</th><th>Curso</th><th>Clase</th><th>Inicio SENCE</th><th>Cierre SENCE</th><th>ID Sesión SENCE</th><th>Estado</th><th></th></tr></thead>
+    <tbody>${docs.map(d => { const a = d.data(); return `<tr>
+      <td>${escHtml(a.userName||a.userEmail||'—')}</td>
+      <td><span style="font-family:'DM Mono';font-size:12px">${escHtml(a.runAlumno||'—')}</span></td>
+      <td style="font-size:12px">${escHtml(a.courseName||'—')}</td>
+      <td>${escHtml(a.classTitle||'—')}</td>
+      <td style="font-size:12px">${a.inicioSesion ? fmtDateTime(a.inicioSesion) : '—'}</td>
+      <td style="font-size:12px">${a.cierreSesion ? fmtDateTime(a.cierreSesion) : (a.sessionOpen ? '<span class="badge badge-live">Activa</span>' : '—')}</td>
+      <td><span style="font-family:'DM Mono';font-size:11px;color:var(--text-light)">${escHtml((a.idSesionSence||'—').slice(0,20))}${a.idSesionSence&&a.idSesionSence.length>20?'…':''}</span></td>
+      <td>${estadoBadge(a)}</td>
+      <td><button class="btn btn-sm btn-danger" title="Eliminar este registro" onclick="eliminarRegistroAtt('${d.id}')">🗑️</button></td>
+    </tr>`; }).join('')}</tbody></table></div>
+    ${_attMas ? '<div style="text-align:center;margin-top:12px"><button class="btn btn-secondary" onclick="cargarAsistencia(false)">⬇️ Cargar más (100)</button></div>' : ''}</div>`;
+}
+async function eliminarRegistroAtt(id) {
+  const d = _attDocs.find(x => x.id === id); const a = d?.data() || {};
+  if (!confirm(`¿Eliminar este registro de asistencia?\n${a.userName||''} — ${a.classTitle||''}\n\nUn registro de una sesión real queda además en SENCE; esto solo lo borra de la plataforma.`)) return;
+  try { await db.collection('senceAttendance').doc(id).delete(); _attDocs = _attDocs.filter(x => x.id !== id); pintarAsistencia(); toast('🗑️ Registro eliminado.', 'success'); }
+  catch (e) { toast('❌ ' + e.message, 'error'); }
+}
+async function limpiarPendientesAtt() {
+  const lista = _attFiltrados().filter(d => { const a = d.data(); return !a.sessionOpen && (a.estadoSesion === 'pendiente' || a.estadoSesion === 'error'); });
+  if (!lista.length) return toast('No hay registros sin completar (con los filtros actuales).', 'info');
+  if (!confirm(`¿Eliminar ${lista.length} registros "sin completar" o con error?\n\nSon intentos que nunca llegaron a abrir sesión en SENCE. No se tocan las sesiones abiertas ni las cerradas.`)) return;
+  try {
+    for (let i = 0; i < lista.length; i += 400) { const b = db.batch(); lista.slice(i, i + 400).forEach(d => b.delete(d.ref)); await b.commit(); }
+    const ids = new Set(lista.map(d => d.id)); _attDocs = _attDocs.filter(d => !ids.has(d.id)); pintarAsistencia();
+    toast(`🗑️ ${lista.length} registros eliminados.`, 'success');
+  } catch (e) { toast('❌ ' + e.message, 'error'); }
 }
 
 /* ════════════════════════════════════════════════
@@ -2083,7 +2138,8 @@ async function cerrarSesionesHuerfanas() {
 }
 
 async function exportAttendance() {
-  const snap = await db.collection('senceAttendance').orderBy('createdAt','desc').get();
+  const [dExp, hExp] = _attRango();
+  const snap = await db.collection('senceAttendance').where('createdAt','>=',dExp).where('createdAt','<=',hExp).orderBy('createdAt','desc').get();
   const rows = [['Alumno','Email','RUN','Clase','CodSENCE','CodigoCurso','Inicio SENCE','Cierre SENCE','ID Sesión SENCE','Estado']];
   snap.docs.forEach(d => {
     const a = d.data();
@@ -2268,7 +2324,7 @@ async function renderMyAttendance(mc) {
   try {
     const snap = await db.collection('senceAttendance')
       .where('userId','==',currentUser.uid)
-      .orderBy('createdAt','desc').get();
+      .orderBy('createdAt','desc').limit(100).get();
     const cont = document.getElementById('myAttContainer');
     if (snap.empty) { cont.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>Sin registros de asistencia aún.</p></div>'; return; }
 
