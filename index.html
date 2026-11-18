@@ -14,6 +14,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-functions-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <style>
 /* ══════════════════════════════════════════════
@@ -57,6 +58,14 @@
   --transition: 0.18s ease;
 }
 
+#mainContent { zoom: var(--a11y-zoom, 1); }
+body.a11y-hc { --bg:#000; --card-bg:#000; --text:#fff; --text-mid:#fff; --text-light:#e6e6e6; --border:#fff; --primary:#ffd400; --primary-dark:#ffd400; --primary-light:#ffd400; }
+body.a11y-hc .card, body.a11y-hc .live-class-card { border:2px solid #fff; }
+body.a11y-hc .btn-primary { color:#000; }
+body.a11y-hc a { color:#ffd400; }
+.a11y-bar { position:fixed; right:10px; bottom:10px; z-index:9000; display:flex; gap:4px; background:#fff; border:2px solid #1a2e1e; border-radius:10px; padding:4px; box-shadow:0 2px 10px rgba(0,0,0,.25); }
+.a11y-bar button { min-width:36px; height:34px; border:1px solid #1a2e1e; background:#fff; color:#1a2e1e; border-radius:6px; font-weight:700; cursor:pointer; font-size:14px; }
+.a11y-bar button:focus-visible { outline:3px solid #2980b9; }
 * { margin:0; padding:0; box-sizing:border-box; }
 body {
   font-family: 'Sora', system-ui, sans-serif;
@@ -1044,6 +1053,8 @@ function updateSidebar() {
     { label: '📊 Panel',           view: 'dashboard'    },
     { label: '📹 Clases en Vivo',  view: 'live-classes' },
     { label: '➕ Nueva Clase',     view: 'new-class'    },
+    { label: '📥 Importar Excel',  view: 'import-classes' },
+    { label: '🧾 Matrículas',      view: 'matriculas'   },
     { label: '📖 Libro de Clases', view: 'libro-clases' },
     { label: '📜 Declaraciones Juradas', view: 'declaraciones' },
     { label: '💬 Foro / Mensajería', view: 'foro' },
@@ -1102,6 +1113,8 @@ function renderMain(view, params={}) {
     'dashboard':          renderAdminDashboard,
     'live-classes':       renderLiveClasses,
     'new-class':          renderNewClass,
+    'import-classes':     renderImportClasses,
+    'matriculas':         renderMatriculas,
     'attendance':         renderAttendance,
     'sence-log':          renderSenceLog,
     'sence-config':       renderSenceConfig,
@@ -1175,14 +1188,18 @@ function genSessionId() {
 ════════════════════════════════════════════════ */
 async function renderAdminDashboard(mc) {
   try {
-    const [classSnap, attSnap] = await Promise.all([
+    const hoy0 = new Date(); hoy0.setHours(0, 0, 0, 0);
+    const [classSnap, hoySnap, abiertasSnap] = await Promise.all([
       db.collection('liveClasses').get(),
-      db.collection('senceAttendance').get()
+      db.collection('senceAttendance').where('createdAt', '>=', firebase.firestore.Timestamp.fromDate(hoy0)).get(),
+      db.collection('senceAttendance').where('sessionOpen', '==', true).get()
     ]);
     const total     = classSnap.size;
     const active    = classSnap.docs.filter(d=>d.data().status==='active').length;
-    const totalAtt  = attSnap.size;
-    const openAtt   = attSnap.docs.filter(d=>d.data().sessionOpen===true).length;
+    const totalAtt  = hoySnap.size;
+    const openAtt   = abiertasSnap.size;
+    const _banner = bannerSesionesLargas(abiertasSnap.docs);
+    setTimeout(() => { if (currentView === 'dashboard' && _banner) mc.insertAdjacentHTML('afterbegin', _banner); }, 0);
 
     mc.innerHTML = `
       <div class="page-header">
@@ -1199,7 +1216,7 @@ async function renderAdminDashboard(mc) {
       <div class="stats-grid">
         <div class="stat-card"><div class="stat-icon">📹</div><div class="stat-value">${total}</div><div class="stat-label">Total Clases</div></div>
         <div class="stat-card"><div class="stat-icon">🔴</div><div class="stat-value">${active}</div><div class="stat-label">En Vivo Ahora</div></div>
-        <div class="stat-card"><div class="stat-icon">✅</div><div class="stat-value">${totalAtt}</div><div class="stat-label">Registros SENCE</div></div>
+        <div class="stat-card"><div class="stat-icon">✅</div><div class="stat-value">${totalAtt}</div><div class="stat-label">Registros SENCE hoy</div></div>
         <div class="stat-card"><div class="stat-icon">🟢</div><div class="stat-value">${openAtt}</div><div class="stat-label">Sesiones Abiertas</div></div>
       </div>
 
@@ -1248,12 +1265,15 @@ async function renderLiveClasses(mc) {
   mc.innerHTML = `
     <div class="page-header">
       <div><h2>📹 Clases en Vivo</h2><div class="breadcrumb">Gestión de videoconferencias con registro SENCE</div></div>
-      ${currentRole==='admin' ? '<button class="btn btn-primary" onclick="navigate(\'new-class\')">➕ Nueva Clase</button>' : ''}
+      ${currentRole==='admin' ? '<div class="flex gap-2"><button class="btn btn-secondary" onclick="navigate(\'import-classes\')">📥 Importar Excel</button><button class="btn btn-primary" onclick="navigate(\'new-class\')">➕ Nueva Clase</button></div>' : ''}
     </div>
     <div id="classesContainer"><div class="empty-state"><div class="icon">⏳</div><p>Cargando clases...</p></div></div>`;
 
   try {
-    const snap = await db.collection('liveClasses').orderBy('scheduledAt','desc').get();
+    const snapAll = await db.collection('liveClasses').orderBy('scheduledAt','desc').get();
+    const mats = currentRole === 'student' ? await cargarMisMatriculas() : null;
+    const snap = { docs: snapAll.docs.filter(d => puedeVerClase(d.data(), mats)) };
+    snap.empty = snap.docs.length === 0;
     const cont = document.getElementById('classesContainer');
     if (snap.empty) {
       cont.innerHTML = `<div class="empty-state"><div class="icon">📭</div><p>No hay clases programadas.</p></div>`;
@@ -1293,6 +1313,7 @@ async function renderLiveClasses(mc) {
               <span>📅 ${fmtDateTime(c.scheduledAt)}</span>
               <span>⏱ ${c.duration || 60} min</span>
               <span>🎓 ${escHtml(c.courseName || 'Sin curso')}</span>
+              ${c.profesorNombre ? `<span>👨‍🏫 ${escHtml(c.profesorNombre)}</span>` : ''}
               <span>📋 CodSENCE: <strong>${escHtml(c.codSence || '—')}</strong></span>
             </div>
             ${c.description ? `<p style="font-size:13px;color:var(--text-mid);margin-bottom:12px;">${escHtml(c.description)}</p>` : ''}
@@ -1311,6 +1332,7 @@ async function renderLiveClasses(mc) {
 async function renderNewClass(mc, params={}) {
   const id   = params.id || null;
   const data = params.data || null;
+  const _profsForm = await cargarProfesoresLista();
 
   mc.innerHTML = `
     <div class="page-header">
@@ -1333,6 +1355,15 @@ async function renderNewClass(mc, params={}) {
       </div>
 
       <div class="form-group">
+        <label>Profesor / Capacitador</label>
+        <select id="fc_profesor">
+          <option value="">— sin asignar —</option>
+          ${_profsForm.map(p => `<option value="${p.uid}" ${data?.profesorUid===p.uid?'selected':''}>${escHtml(p.name)} (${escHtml(p.rut)})</option>`).join('')}
+        </select>
+        <small>El profesor asignado verá esta clase en "Mis Clases".</small>
+      </div>
+
+      <div class="form-group">
         <label>Descripción</label>
         <textarea id="fc_desc" rows="3" placeholder="Describe los temas a tratar...">${escHtml(data?.description||'')}</textarea>
       </div>
@@ -1340,7 +1371,7 @@ async function renderNewClass(mc, params={}) {
       <div class="form-row">
         <div class="form-group">
           <label>Fecha y Hora *</label>
-          <input type="datetime-local" id="fc_date" value="${data?.scheduledAt ? new Date(data.scheduledAt.toDate()).toISOString().slice(0,16) : ''}">
+          <input type="datetime-local" id="fc_date" value="${data?.scheduledAt ? toLocalInput(data.scheduledAt) : ''}">
         </div>
         <div class="form-group">
           <label>Duración (minutos) *</label>
@@ -1521,8 +1552,10 @@ async function saveClass(id) {
   if (!testOk(codigoCurso) && (codigoCurso.length < minCurso || codigoCurso.length > 50)) return toast(`⚠️ El CodigoCurso debe tener entre ${minCurso} y 50 caracteres.`,'warning');
   if (linea === 1 && !codigoModulo) return toast('⚠️ Línea 1 (Programas Sociales): indica el Código de Módulo SIC de esta clase.','warning');
 
+  const profUid = document.getElementById('fc_profesor')?.value || '';
+  const profSel = profUid ? document.getElementById('fc_profesor').selectedOptions[0].textContent.replace(/\s*\(.*\)\s*$/, '') : '';
   const data = {
-    title, courseName, description,
+    title, courseName, cursoId: slugCurso(courseName), profesorUid: profUid, profesorNombre: profSel, description,
     scheduledAt: firebase.firestore.Timestamp.fromDate(new Date(dateVal)),
     duration, codSence: linea === 1 ? '' : codSence, codigoCurso, codigoModulo, lineaCapacitacion: linea,
     status, videoType, videoUrl, jitsiRoom, capacidadEstimada,
@@ -1579,6 +1612,9 @@ async function renderClassRoom(mc, params={}) {
   const doc = await db.collection('liveClasses').doc(classId).get();
   if (!doc.exists) { mc.innerHTML='<div class="empty-state"><div class="icon">❌</div><p>Clase no encontrada.</p></div>'; return; }
   const cls = doc.data();
+  if (currentRole === 'student' && cls.cursoId && !(await cargarMisMatriculas()).has(cls.cursoId)) {
+    mc.innerHTML='<div class="empty-state"><div class="icon">🔒</div><p>No estás matriculado en este curso. Contacta a INASEP.</p></div>'; return;
+  }
 
   // Buscar registro de asistencia actual del usuario
   const attSnap = await db.collection('senceAttendance')
@@ -1758,7 +1794,7 @@ function startHeartbeat(attDocId) {
     } catch(e) {
       // Si falla (sin internet), no hacer nada — se detectará como huérfana
     }
-  }, 60000); // cada 60 segundos
+  }, 300000); // cada 5 minutos (cada latido también dispara lecturas en los paneles en vivo)
 
   // Detener el heartbeat si el usuario cierra/recarga la pestaña
   window.addEventListener('beforeunload', stopHeartbeat, { once: true });
@@ -1912,6 +1948,7 @@ async function renderAttendance(mc) {
       <div><h2>👥 Registro de Asistencia</h2><div class="breadcrumb">Control de presencia y sesiones SENCE</div></div>
       <div class="flex gap-2 flex-wrap">
         <button class="btn btn-warning" onclick="cerrarSesionesHuerfanas()">🧹 Cerrar Sesiones Huérfanas</button>
+        <button class="btn btn-info" onclick="abrirInformeCurso()">📊 Informe por curso</button>
         <button class="btn btn-secondary" onclick="exportAttendance()">📥 Exportar CSV</button>
       </div>
     </div>
@@ -1963,7 +2000,7 @@ async function renderAttendance(mc) {
    El admin confirma y cierra manualmente en Firestore.
 ════════════════════════════════════════════════ */
 async function cerrarSesionesHuerfanas() {
-  const TIMEOUT_MIN = 10; // considera huérfana si lastSeen > 10 min sin actualizar
+  const TIMEOUT_MIN = 20; // huérfana si lastSeen > 20 min (latido cada 5 min)
 
   toast('🔍 Buscando sesiones huérfanas...', 'info', 3000);
 
@@ -2183,7 +2220,10 @@ async function renderMyCourses(mc) {
     <div id="myCoursesContainer"><div class="empty-state"><div class="icon">⏳</div><p>Cargando...</p></div></div>`;
 
   try {
-    const snap = await db.collection('liveClasses').where('status','!=','finished').orderBy('status').get();
+    const snapAll = await db.collection('liveClasses').where('status','!=','finished').orderBy('status').get();
+    const mats = await cargarMisMatriculas();
+    const snap = { docs: snapAll.docs.filter(d => puedeVerClase(d.data(), mats)) };
+    snap.empty = snap.docs.length === 0;
     const cont = document.getElementById('myCoursesContainer');
     if (snap.empty) { cont.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>No hay clases disponibles por ahora.</p></div>'; return; }
 
@@ -2578,6 +2618,12 @@ async function resetPasswordAlumno(uid, rut, nombre) {
 
 /* Borra Auth + Firestore vía Worker (el navegador no puede borrar la cuenta de acceso de otra persona) */
 async function eliminarUsuarioCompleto(datos) {
+  if (datos.uid) {
+    try {
+      const ms = await db.collection('matriculas').where('userId', '==', datos.uid).get();
+      if (!ms.empty) { const b = db.batch(); ms.docs.forEach(d => b.delete(d.ref)); await b.commit(); }
+    } catch (e) { console.warn('matrículas', e.message); }
+  }
   const res = await workerFetch('/api/admin/eliminar-usuario', { method: 'POST', body: JSON.stringify(datos) });
   const j = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(j.error || ('Error del servidor (' + res.status + ')'));
@@ -2699,7 +2745,7 @@ async function renderSenceSIC(mc) {
       <div class="sence-info-grid" style="margin-bottom:16px">
         <div class="sence-info-item"><label>Estado Envío</label><span id="sic_estado_envio">⏳ No enviado hoy</span></div>
         <div class="sence-info-item"><label>Último Envío</label><span id="sic_ultimo_envio">—</span></div>
-        <div class="sence-info-item"><label>Registros de asistencia</label><span id="sic_cant_alumnos">Cargando...</span></div>
+        <div class="sence-info-item"><label>Sesiones SENCE</label><span id="sic_cant_alumnos">Cargando...</span></div>
         <div class="sence-info-item"><label>Modo RCE</label><span id="sic_modo_label">—</span></div>
       </div>
 
@@ -2827,9 +2873,9 @@ async function cargarEstadoSIC() {
     await loadSenceConfig();
     const modoEl = document.getElementById('sic_modo_label');
     if (modoEl) modoEl.textContent = SENCE_CONFIG.TEST_MODE === true ? '⚠️ TEST' : SENCE_CONFIG.TEST_MODE === false ? '✅ PRODUCCIÓN' : '—';
-    const snap = await db.collection('senceAttendance').get();
+    const abiertas = await db.collection('senceAttendance').where('sessionOpen', '==', true).get();
     const cantEl = document.getElementById('sic_cant_alumnos');
-    if (cantEl) cantEl.textContent = snap.size + ' registros';
+    if (cantEl) cantEl.textContent = abiertas.size + ' sesiones abiertas ahora';
     const histSnap = await db.collection('sicEnvios').orderBy('createdAt', 'desc').limit(1).get();
     const ultEl = document.getElementById('sic_ultimo_envio');
     if (ultEl) {
@@ -3142,7 +3188,7 @@ async function renderProfesores(mc) {
     <div class="page-header">
       <div><h2>👨‍🏫 Gestión de Profesores</h2>
       <div class="breadcrumb">Registro y administración de docentes</div></div>
-      <button class="btn btn-primary" onclick="showAgregarProfesor()">➕ Agregar Profesor</button>
+      <div class="flex gap-2"><button class="btn btn-secondary" onclick="showProfesoresMasivo()">📋 Carga masiva</button><button class="btn btn-primary" onclick="showAgregarProfesor()">➕ Agregar Profesor</button></div>
     </div>
 
     <div class="card">
@@ -3272,6 +3318,644 @@ async function eliminarProfesor(uid, nombre) {
 }
 
 /* ════════════════════════════════════════════════
+   v4 — UTILIDADES DE CURSO / MATRÍCULA / PROFESOR
+════════════════════════════════════════════════ */
+function normTxt(s) {
+  return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+function slugCurso(name) {
+  return normTxt(name).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+}
+function toLocalInput(ts) {
+  const d = ts?.toDate ? ts.toDate() : new Date(ts);
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+async function cargarProfesoresLista() {
+  try {
+    const s = await db.collection('users').where('role', '==', 'teacher').orderBy('name').get();
+    return s.docs.map(d => ({ uid: d.id, name: d.data().name || '', rut: d.data().rut || '' }));
+  } catch (e) { console.warn('profesores', e.message); return []; }
+}
+async function cargarMisMatriculas() {
+  try {
+    const s = await db.collection('matriculas').where('userId', '==', currentUser.uid).get();
+    return new Set(s.docs.map(d => d.data().cursoId));
+  } catch (e) { console.warn('matriculas', e.message); return new Set(); }
+}
+/* ¿Este usuario ve esta clase? (admin: todas · profesor: las suyas · alumno: cursos matriculados) */
+function puedeVerClase(c, mats) {
+  if (currentRole === 'admin') return true;
+  if (currentRole === 'teacher') return c.profesorUid === currentUser.uid || (!c.profesorUid && !c.profesorNombre);
+  return !c.cursoId || (mats && mats.has(c.cursoId));
+}
+/* Validación de campos SENCE a nivel curso (misma regla que saveClass y el Worker) */
+function validarCamposSence(linea, codSence, codigoCurso, codigoModulo) {
+  const testOk = v => SENCE_CONFIG.TEST_MODE === true && v === '-1';
+  if (![1, 3, 6].includes(linea)) return 'Línea de capacitación inválida.';
+  if (linea === 3 && !testOk(codSence) && codSence.length !== 10) return 'Línea 3: el CodSence debe tener exactamente 10 caracteres.';
+  if (linea === 1 && codSence && !testOk(codSence)) return 'Línea 1 (Programas Sociales): el CodSence debe ir en blanco.';
+  const minCurso = linea === 6 ? 1 : 7;
+  if (!testOk(codigoCurso) && (codigoCurso.length < minCurso || codigoCurso.length > 50)) return `El CodigoCurso debe tener entre ${minCurso} y 50 caracteres.`;
+  return '';
+}
+
+/* ════════════════════════════════════════════════
+   IMPORTAR CLASES DESDE EXCEL
+════════════════════════════════════════════════ */
+let _imp = { rows: [], profs: [], mapa: {} };
+
+async function renderImportClasses(mc) {
+  await loadSenceConfig();
+  const tzOk = (Intl.DateTimeFormat().resolvedOptions().timeZone === 'America/Santiago');
+  mc.innerHTML = `
+    <div class="page-header">
+      <div><h2>📥 Importar Programación desde Excel</h2>
+      <div class="breadcrumb"><a onclick="navigate('live-classes')">Clases en Vivo</a> › Importar</div></div>
+      <button class="btn btn-secondary" onclick="descargarPlantillaClases()">⬇️ Descargar plantilla</button>
+    </div>
+    ${tzOk ? '' : `<div class="card" style="border-color:var(--warning)"><strong>⚠️ Tu navegador no está en hora de Chile.</strong> Las horas se guardarían desplazadas. Cambia la zona horaria del computador a "Santiago" antes de importar.</div>`}
+
+    <div class="card">
+      <div class="card-header"><h3>1️⃣ Datos del curso (valen para todas las clases del archivo)</h3></div>
+      <div class="form-row">
+        <div class="form-group"><label>Nombre del curso *</label>
+          <input type="text" id="im_curso" placeholder="Ej: Curso de Guardia de Seguridad"></div>
+        <div class="form-group"><label>Línea de capacitación</label>
+          <select id="im_linea">
+            <option value="3">3 — Franquicia Tributaria / Impulsa Personas</option>
+            <option value="1">1 — Programas Sociales / Becas Laborales (CodSence en blanco)</option>
+            <option value="6">6 — FPT</option>
+          </select></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>CodSence (10 caracteres)</label>
+          <input type="text" id="im_codSence" maxlength="10" placeholder="Línea 3: 10 caracteres · Línea 1: vacío"></div>
+        <div class="form-group"><label>Código del curso (CodigoCurso) *</label>
+          <input type="text" id="im_codigoCurso" maxlength="50" placeholder="Mínimo 7 caracteres (FPT: 1)"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Código de módulo SIC por defecto (solo línea 1)</label>
+          <input type="text" id="im_codModulo" placeholder="Opcional si el Excel trae la columna 'Código módulo'"></div>
+        <div class="form-group"><label>Videoconferencia</label>
+          <select id="im_videoType" onchange="document.getElementById('im_videoUrlBox').style.display = this.value==='jitsi' ? 'none' : 'block'">
+            <option value="jitsi">🟢 Jitsi (una sala por clase, automática)</option>
+            <option value="meet">📱 Google Meet (mismo enlace para todas)</option>
+            <option value="zoom">💙 Zoom (mismo enlace para todas)</option>
+            <option value="teams">🟦 Microsoft Teams (mismo enlace para todas)</option>
+            <option value="custom">🔗 URL personalizada (mismo enlace para todas)</option>
+          </select></div>
+      </div>
+      <div class="form-group" id="im_videoUrlBox" style="display:none"><label>URL de la videoconferencia *</label>
+        <input type="url" id="im_videoUrl" placeholder="https://..."></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><h3>2️⃣ Archivo Excel (.xlsx) o CSV</h3></div>
+      <p style="font-size:13px;color:var(--text-mid);margin-bottom:10px">
+        Columnas: <strong>Fecha · Horario clases · Asignatura · Nombre del capacitador</strong> (opcional: <em>Código módulo</em>).
+        Horario con formato <code>09:15 a 17:30</code>. Cada fila es una clase.</p>
+      <input type="file" id="im_file" accept=".xlsx,.xls,.csv">
+      <div style="margin-top:12px"><button class="btn btn-primary" onclick="previsualizarImportacion()">🔍 Previsualizar</button></div>
+    </div>
+
+    <div id="im_preview"></div>`;
+}
+
+function descargarPlantillaClases() {
+  const aoa = [
+    ['Fecha', 'Horario clases', 'Asignatura', 'Nombre del capacitador', 'Código módulo (solo línea 1)'],
+    ['23-11-2026', '09:15 a 12:15', 'Ejemplo: Legislación aplicada', 'Nombre Apellido Apellido', ''],
+    ['23-11-2026', '12:15 a 14:30', 'Ejemplo: Seguridad de las instalaciones', 'Nombre Apellido Apellido', ''],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 12 }, { wch: 16 }, { wch: 48 }, { wch: 34 }, { wch: 26 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Programacion');
+  XLSX.writeFile(wb, 'plantilla_programacion_clases.xlsx');
+}
+
+function _fechaDeCelda(v) {
+  if (v instanceof Date && !isNaN(v)) return { y: v.getFullYear(), m: v.getMonth() + 1, d: v.getDate() };
+  if (typeof v === 'number' && v > 20000 && v < 80000) {
+    const dt = new Date(Math.round(Date.UTC(1899, 11, 30) + v * 86400000));
+    return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() };
+  }
+  const s = String(v || '').trim();
+  let m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2,4})$/);
+  if (m) { let y = +m[3]; if (y < 100) y += 2000; return { y, m: +m[2], d: +m[1] }; }
+  m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return { y: +m[1], m: +m[2], d: +m[3] };
+  return null;
+}
+function _horarioDeCelda(v) {
+  const s = String(v || '');
+  const m = s.match(/(\d{1,2})\s*[:.hH]\s*(\d{2})\s*(?:a|al|-|–|—|hasta)\s*(\d{1,2})\s*[:.hH]\s*(\d{2})/i);
+  if (!m) return null;
+  const h1 = +m[1], n1 = +m[2], h2 = +m[3], n2 = +m[4];
+  if (h1 > 23 || h2 > 23 || n1 > 59 || n2 > 59) return null;
+  return { h1, n1, h2, n2, dur: (h2 * 60 + n2) - (h1 * 60 + n1) };
+}
+function matchProfesor(nombre, profs) {
+  const n = normTxt(nombre);
+  if (!n) return null;
+  const ex = profs.find(p => normTxt(p.name) === n);
+  if (ex) return ex;
+  const tk = n.split(' ').filter(Boolean);
+  const cand = profs.filter(p => {
+    const pt = normTxt(p.name).split(' ').filter(Boolean);
+    const [a, b] = tk.length <= pt.length ? [tk, pt] : [pt, tk];
+    return a.length >= 2 && a.every(t => b.includes(t));
+  });
+  return cand.length === 1 ? cand[0] : null;
+}
+
+async function previsualizarImportacion() {
+  const curso = document.getElementById('im_curso').value.trim();
+  const linea = parseInt(document.getElementById('im_linea').value);
+  const codSence = document.getElementById('im_codSence').value.trim();
+  const codigoCurso = document.getElementById('im_codigoCurso').value.trim();
+  const codModDef = document.getElementById('im_codModulo').value.trim();
+  const videoType = document.getElementById('im_videoType').value;
+  const videoUrl = document.getElementById('im_videoUrl').value.trim();
+  const file = document.getElementById('im_file').files[0];
+  const box = document.getElementById('im_preview');
+
+  if (!curso) return toast('⚠️ Indica el nombre del curso.', 'warning');
+  if (!slugCurso(curso)) return toast('⚠️ El nombre del curso debe tener letras o números.', 'warning');
+  const eSence = validarCamposSence(linea, codSence, codigoCurso, codModDef);
+  if (eSence) return toast('⚠️ ' + eSence, 'warning', 6000);
+  if (videoType !== 'jitsi' && !/^https:\/\//i.test(videoUrl)) return toast('⚠️ Ingresa la URL (https://) de la videoconferencia.', 'warning');
+  if (!file) return toast('⚠️ Selecciona el archivo Excel.', 'warning');
+  if (typeof XLSX === 'undefined') return toast('❌ No se cargó la librería de Excel. Recarga la página (Ctrl+F5).', 'error');
+
+  box.innerHTML = '<div class="empty-state"><div class="icon">⏳</div><p>Leyendo archivo...</p></div>';
+  let aoa;
+  try {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
+  } catch (e) { box.innerHTML = ''; return toast('❌ No se pudo leer el archivo: ' + e.message, 'error'); }
+
+  // Detectar fila de encabezados y columnas
+  let hi = aoa.findIndex(r => r.some(c => normTxt(c) === 'fecha'));
+  if (hi < 0) { box.innerHTML = ''; return toast('❌ No encontré la columna "Fecha" en el archivo.', 'error', 6000); }
+  const col = { fecha: -1, horario: -1, asig: -1, cap: -1, mod: -1 };
+  aoa[hi].forEach((h, i) => {
+    const t = normTxt(h);
+    if (t.includes('codigo') && t.includes('modulo')) col.mod = i;
+    else if (t.includes('fecha')) col.fecha = i;
+    else if (t.includes('horario') || t === 'hora') col.horario = i;
+    else if (t.includes('asignatura') || t.includes('materia') || t.includes('modulo')) col.asig = i;
+    else if (t.includes('capacitador') || t.includes('profesor') || t.includes('docente') || t.includes('relator')) col.cap = i;
+  });
+  const faltan = ['fecha', 'horario', 'asig', 'cap'].filter(k => col[k] < 0);
+  if (faltan.length) { box.innerHTML = ''; return toast('❌ Faltan columnas: ' + faltan.map(k => ({ fecha: 'Fecha', horario: 'Horario clases', asig: 'Asignatura', cap: 'Nombre del capacitador' })[k]).join(', '), 'error', 7000); }
+
+  const profs = await cargarProfesoresLista();
+  const cursoId = slugCurso(curso);
+  const existentes = new Set();
+  const exSnap = await db.collection('liveClasses').where('cursoId', '==', cursoId).get();
+  exSnap.docs.forEach(d => { const c = d.data(); existentes.add(`${c.scheduledAt?.toMillis?.()}|${normTxt(c.title)}`); });
+
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const rows = [];
+  for (let i = hi + 1; i < aoa.length; i++) {
+    const r = aoa[i];
+    if (r.every(c => String(c).trim() === '')) continue;
+    const fila = i + 1, errores = [], avisos = [];
+    const f = _fechaDeCelda(r[col.fecha]);
+    const h = _horarioDeCelda(r[col.horario]);
+    const asig = String(r[col.asig] || '').trim();
+    const cap = String(r[col.cap] || '').trim().replace(/\s+/g, ' ');
+    const codMod = (col.mod >= 0 ? String(r[col.mod] || '').trim() : '') || codModDef;
+    let start = null;
+    if (!f) errores.push('Fecha inválida');
+    if (!h) errores.push('Horario inválido (use 09:15 a 17:30)');
+    else if (h.dur <= 0) errores.push('La hora de término es anterior al inicio');
+    else if (h.dur > 720) errores.push('Duración mayor a 12 horas');
+    if (asig.length < 3) errores.push('Falta la asignatura');
+    if (f && h) {
+      start = new Date(f.y, f.m - 1, f.d, h.h1, h.n1);
+      if (isNaN(start) || start.getMonth() !== f.m - 1) { errores.push('Fecha inexistente'); start = null; }
+      else if (start < hoy) avisos.push('Fecha pasada');
+    }
+    if (linea === 1 && !codMod) errores.push('Falta código de módulo SIC');
+    if (!cap) avisos.push('Sin capacitador');
+    const row = { fila, f, h, start, asig, cap, codMod, errores, avisos, dup: false };
+    if (start && h && h.dur > 0 && existentes.has(`${start.getTime()}|${normTxt(asig)}`)) row.dup = true;
+    rows.push(row);
+  }
+  // Traslapes dentro del archivo
+  const ok = rows.filter(r => r.start && r.h && r.h.dur > 0);
+  ok.forEach(a => ok.forEach(b => {
+    if (a !== b && a.start < new Date(b.start.getTime() + b.h.dur * 60000) && b.start < new Date(a.start.getTime() + a.h.dur * 60000)) {
+      if (!a.avisos.includes('Traslape de horario')) a.avisos.push('Traslape de horario');
+    }
+  }));
+
+  // Mapa capacitador → profesor registrado
+  const mapa = {};
+  [...new Set(rows.map(r => r.cap).filter(Boolean))].forEach(n => { mapa[n] = matchProfesor(n, profs)?.uid || ''; });
+  _imp = { rows, profs, mapa, curso, cursoId, linea, codSence, codigoCurso, videoType, videoUrl };
+  renderPreviewImportacion();
+}
+
+function renderPreviewImportacion() {
+  const { rows, profs, mapa } = _imp;
+  const box = document.getElementById('im_preview');
+  const importables = rows.filter(r => !r.errores.length && !r.dup);
+  const nErr = rows.filter(r => r.errores.length).length;
+  const nDup = rows.filter(r => r.dup).length;
+  const horas = Math.round(importables.reduce((s, r) => s + r.h.dur, 0) / 6) / 10;
+
+  const caps = Object.keys(mapa);
+  const mapaHtml = caps.length ? `
+    <div class="card">
+      <div class="card-header"><h3>3️⃣ Capacitadores → profesores registrados</h3></div>
+      <p style="font-size:13px;color:var(--text-mid);margin-bottom:10px">Cada clase queda asignada al profesor elegido; ese profesor la verá en "Mis Clases". Si falta alguno, regístralo en <a onclick="navigate('profesores')" style="cursor:pointer;text-decoration:underline">Profesores</a> y vuelve a previsualizar.</p>
+      <div class="table-wrap"><table><thead><tr><th>Nombre en el Excel</th><th>Profesor en la plataforma</th></tr></thead><tbody>
+        ${caps.map((n, i) => `<tr><td>${escHtml(n)}</td><td>
+          <select onchange="_imp.mapa[${JSON.stringify(n).replace(/"/g, '&quot;')}] = this.value; renderPreviewImportacion()">
+            <option value="">— sin asignar (solo texto) —</option>
+            ${profs.map(p => `<option value="${p.uid}" ${mapa[n] === p.uid ? 'selected' : ''}>${escHtml(p.name)} (${escHtml(p.rut)})</option>`).join('')}
+          </select>
+          ${mapa[n] ? '<span class="badge badge-green">✔ vinculado</span>' : '<span class="badge badge-orange">sin vincular</span>'}</td></tr>`).join('')}
+      </tbody></table></div>
+    </div>` : '';
+
+  box.innerHTML = `
+    <div class="card">
+      <div class="card-header"><h3>🔍 Previsualización — ${escHtml(_imp.curso)}</h3></div>
+      <div style="font-size:13.5px;margin-bottom:12px">
+        <strong>${rows.length}</strong> filas leídas ·
+        <span style="color:var(--success)"><strong>${importables.length}</strong> se crearán (${horas} h)</span> ·
+        <span style="color:var(--danger)"><strong>${nErr}</strong> con error</span> ·
+        <span style="color:var(--text-light)"><strong>${nDup}</strong> ya existen</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Fila</th><th>Fecha</th><th>Horario</th><th>Min</th><th>Asignatura</th><th>Capacitador</th><th>Estado</th></tr></thead>
+        <tbody>${rows.map(r => {
+          const est = r.errores.length ? `<span class="badge badge-red">❌ ${escHtml(r.errores.join('; '))}</span>`
+            : r.dup ? '<span class="badge badge-gray">🔁 Ya existe</span>'
+            : `<span class="badge badge-green">✅ OK</span>${r.avisos.map(a => ` <span class="badge badge-orange">⚠️ ${escHtml(a)}</span>`).join('')}`;
+          return `<tr><td>${r.fila}</td>
+            <td>${r.f ? String(r.f.d).padStart(2, '0') + '-' + String(r.f.m).padStart(2, '0') + '-' + r.f.y : '—'}</td>
+            <td>${r.h ? String(r.h.h1).padStart(2, '0') + ':' + String(r.h.n1).padStart(2, '0') + ' a ' + String(r.h.h2).padStart(2, '0') + ':' + String(r.h.n2).padStart(2, '0') : '—'}</td>
+            <td>${r.h && r.h.dur > 0 ? r.h.dur : '—'}</td><td>${escHtml(r.asig)}</td><td>${escHtml(r.cap || '—')}</td><td>${est}</td></tr>`;
+        }).join('')}</tbody></table></div>
+    </div>
+    ${mapaHtml}
+    <div class="card">
+      <button class="btn btn-success" id="btnImportar" ${importables.length ? '' : 'disabled'} onclick="ejecutarImportacion()">✅ Crear ${importables.length} clases</button>
+      <span style="font-size:12.5px;color:var(--text-light);margin-left:10px">Las filas con error o ya existentes se omiten. Las clases quedan "Programadas".</span>
+    </div>`;
+}
+
+async function ejecutarImportacion() {
+  const { rows, profs, mapa, curso, cursoId, linea, codSence, codigoCurso, videoType, videoUrl } = _imp;
+  const lista = rows.filter(r => !r.errores.length && !r.dup);
+  if (!lista.length) return;
+  if (!confirm(`¿Crear ${lista.length} clases del curso "${curso}"?`)) return;
+  const btn = document.getElementById('btnImportar'); btn.disabled = true; btn.textContent = 'Creando...';
+  const lote = 'imp-' + Date.now();
+  const p2 = n => String(n).padStart(2, '0');
+  try {
+    for (let i = 0; i < lista.length; i += 400) {
+      const batch = db.batch();
+      lista.slice(i, i + 400).forEach(r => {
+        const prof = profs.find(p => p.uid === mapa[r.cap]);
+        const room = `inasep-${cursoId}-${r.start.getFullYear()}${p2(r.start.getMonth()+1)}${p2(r.start.getDate())}-${p2(r.h.h1)}${p2(r.h.n1)}`.slice(0, 80);
+        batch.set(db.collection('liveClasses').doc(), {
+          title: r.asig, courseName: curso, cursoId,
+          description: r.cap ? 'Capacitador: ' + r.cap : '',
+          scheduledAt: firebase.firestore.Timestamp.fromDate(r.start),
+          duration: r.h.dur,
+          codSence: linea === 1 ? '' : codSence, codigoCurso, codigoModulo: r.codMod || '', lineaCapacitacion: linea,
+          status: 'scheduled', videoType,
+          videoUrl: videoType === 'jitsi' ? `https://meet.jit.si/${room}` : videoUrl,
+          jitsiRoom: videoType === 'jitsi' ? room : '',
+          capacidadEstimada: 0,
+          profesorUid: prof?.uid || '', profesorNombre: prof?.name || r.cap || '',
+          importLote: lote,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          createdBy: currentUser.uid
+        });
+      });
+      await batch.commit();
+    }
+    toast(`✅ ${lista.length} clases creadas. Ahora matricula a los alumnos del curso.`, 'success', 7000);
+    navigate('matriculas');
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Reintentar';
+    toast('❌ Error al crear: ' + e.message, 'error', 8000);
+  }
+}
+
+/* ════════════════════════════════════════════════
+   MATRÍCULAS POR CURSO
+════════════════════════════════════════════════ */
+let _mat = { cursos: new Map(), alumnos: [], matriculados: [], cursoId: '' };
+
+async function renderMatriculas(mc) {
+  mc.innerHTML = `
+    <div class="page-header">
+      <div><h2>🧾 Matrículas por Curso</h2><div class="breadcrumb">Quién puede ver y registrar asistencia en cada curso</div></div>
+    </div>
+    <div class="card">
+      <div class="form-group"><label>Curso</label><select id="mat_curso" onchange="cargarMatriculasCurso(this.value)"></select></div>
+      <p style="font-size:12.5px;color:var(--text-light)">Un alumno solo ve —y solo puede iniciar sesión SENCE en— las clases de los cursos donde está matriculado.</p>
+    </div>
+    <div id="mat_body"><div class="empty-state"><div class="icon">⏳</div><p>Cargando...</p></div></div>`;
+  try {
+    const [cs, as] = await Promise.all([
+      db.collection('liveClasses').get(),
+      db.collection('users').where('role', '==', 'student').orderBy('name').get()
+    ]);
+    _mat.cursos = new Map();
+    cs.docs.forEach(d => {
+      const c = d.data(); const id = c.cursoId || slugCurso(c.courseName);
+      if (!id) return;
+      if (!_mat.cursos.has(id)) _mat.cursos.set(id, { name: c.courseName, legacy: !c.cursoId, n: 0 });
+      _mat.cursos.get(id).n++;
+    });
+    _mat.alumnos = as.docs.map(d => ({ uid: d.id, name: d.data().name || '', rut: d.data().rut || '' }));
+    const sel = document.getElementById('mat_curso');
+    if (!_mat.cursos.size) {
+      document.getElementById('mat_body').innerHTML = '<div class="empty-state"><div class="icon">📭</div><p>Aún no hay cursos. Crea o importa clases primero (el curso se toma del nombre).</p></div>';
+      return;
+    }
+    sel.innerHTML = [..._mat.cursos.entries()].map(([id, c]) => `<option value="${id}">${escHtml(c.name)} (${c.n} clases)</option>`).join('');
+    cargarMatriculasCurso(sel.value);
+  } catch (e) {
+    document.getElementById('mat_body').innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>${escHtml(e.message)}</p></div>`;
+  }
+}
+
+async function cargarMatriculasCurso(cursoId) {
+  _mat.cursoId = cursoId;
+  const body = document.getElementById('mat_body');
+  const s = await db.collection('matriculas').where('cursoId', '==', cursoId).get();
+  _mat.matriculados = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+  const yaIds = new Set(_mat.matriculados.map(m => m.userId));
+  const libres = _mat.alumnos.filter(a => !yaIds.has(a.uid));
+  const cinfo = _mat.cursos.get(cursoId);
+  const aviso = cinfo?.legacy ? `<div class="card" style="border-color:var(--warning)">⚠️ Las clases de este curso se crearon antes de las matrículas: al matricular alumnos y volver a guardar cada clase quedarán vinculadas. <strong>Mientras tanto la clase sigue abierta a todos</strong> (sin filtro).</div>` : '';
+  body.innerHTML = `${aviso}
+    <div class="card">
+      <div class="card-header"><h3>✅ Matriculados (${_mat.matriculados.length})</h3>
+        <button class="btn btn-sm btn-secondary" onclick="cargarMatriculasCurso('${cursoId}')">🔄</button></div>
+      ${_mat.matriculados.length ? `<div class="table-wrap"><table><thead><tr><th>Alumno</th><th>RUT</th><th></th></tr></thead><tbody>
+        ${_mat.matriculados.map(m => `<tr><td>${escHtml(m.nombre)}</td><td style="font-family:'DM Mono'">${escHtml(m.rut)}</td>
+          <td><button class="btn btn-sm btn-danger" onclick="quitarMatricula('${m.id}')">Quitar</button></td></tr>`).join('')}
+      </tbody></table></div>` : '<div class="empty-state"><p>Nadie matriculado todavía.</p></div>'}
+    </div>
+    <div class="card">
+      <div class="card-header"><h3>➕ Matricular</h3>
+        <button class="btn btn-sm btn-primary" onclick="matricularTodos()">Matricular a TODOS los alumnos (${libres.length})</button></div>
+      <div class="form-group"><label>Buscar y marcar alumnos</label>
+        <input type="text" id="mat_buscar" placeholder="Nombre o RUT..." oninput="filtrarLibresMat()"></div>
+      <div id="mat_libres" style="max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px">
+        ${libres.map(a => `<label class="mat-row" data-t="${escHtml(normTxt(a.name + ' ' + a.rut))}" style="display:flex;gap:8px;padding:4px 2px;cursor:pointer">
+          <input type="checkbox" value="${a.uid}"> <span>${escHtml(a.name)} <small style="font-family:'DM Mono';color:var(--text-light)">${escHtml(a.rut)}</small></span></label>`).join('') || '<em>No quedan alumnos por matricular.</em>'}
+      </div>
+      <div style="margin-top:10px"><button class="btn btn-success" onclick="matricularMarcados()">✅ Matricular marcados</button></div>
+      <hr style="margin:18px 0;border:none;border-top:1px solid var(--border)">
+      <div class="form-group"><label>O pega RUTs (uno por línea)</label>
+        <textarea id="mat_ruts" rows="4" placeholder="12345678-9&#10;11111111-1"></textarea></div>
+      <button class="btn btn-secondary" onclick="matricularPorRut()">Matricular por RUT</button>
+    </div>`;
+}
+function filtrarLibresMat() {
+  const q = normTxt(document.getElementById('mat_buscar').value);
+  document.querySelectorAll('#mat_libres .mat-row').forEach(el => { el.style.display = el.dataset.t.includes(q) ? 'flex' : 'none'; });
+}
+async function _matricular(alumnos) {
+  if (!alumnos.length) return toast('⚠️ No hay alumnos para matricular.', 'warning');
+  const cinfo = _mat.cursos.get(_mat.cursoId);
+  for (let i = 0; i < alumnos.length; i += 400) {
+    const batch = db.batch();
+    alumnos.slice(i, i + 400).forEach(a => batch.set(db.collection('matriculas').doc(`${a.uid}__${_mat.cursoId}`), {
+      userId: a.uid, rut: a.rut, nombre: a.name, cursoId: _mat.cursoId, courseName: cinfo?.name || '',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    }));
+    await batch.commit();
+  }
+  toast(`✅ ${alumnos.length} alumno(s) matriculado(s).`, 'success');
+  cargarMatriculasCurso(_mat.cursoId);
+}
+function matricularMarcados() {
+  const ids = [...document.querySelectorAll('#mat_libres input:checked')].map(i => i.value);
+  _matricular(_mat.alumnos.filter(a => ids.includes(a.uid))).catch(e => toast('❌ ' + e.message, 'error'));
+}
+function matricularTodos() {
+  const ya = new Set(_mat.matriculados.map(m => m.userId));
+  const libres = _mat.alumnos.filter(a => !ya.has(a.uid));
+  if (!libres.length) return toast('Ya están todos matriculados.', 'info');
+  if (!confirm(`¿Matricular a ${libres.length} alumnos en este curso?`)) return;
+  _matricular(libres).catch(e => toast('❌ ' + e.message, 'error'));
+}
+function _normRutTxt(s) {
+  let r = String(s || '').replace(/[.\s]/g, '').toUpperCase();
+  if (r && !r.includes('-') && r.length > 1) r = r.slice(0, -1) + '-' + r.slice(-1);
+  return r;
+}
+function matricularPorRut() {
+  const lineas = document.getElementById('mat_ruts').value.split(/\n+/).map(_normRutTxt).filter(Boolean);
+  const porRut = new Map(_mat.alumnos.map(a => [_normRutTxt(a.rut), a]));
+  const hallados = [], noHallados = [];
+  lineas.forEach(r => (porRut.has(r) ? hallados.push(porRut.get(r)) : noHallados.push(r)));
+  if (noHallados.length) toast('⚠️ RUT sin alumno registrado: ' + noHallados.join(', '), 'warning', 9000);
+  _matricular(hallados).catch(e => toast('❌ ' + e.message, 'error'));
+}
+async function quitarMatricula(id) {
+  if (!confirm('¿Quitar esta matrícula? El alumno dejará de ver el curso (su asistencia ya registrada se conserva).')) return;
+  try { await db.collection('matriculas').doc(id).delete(); cargarMatriculasCurso(_mat.cursoId); }
+  catch (e) { toast('❌ ' + e.message, 'error'); }
+}
+
+/* ════════════════════════════════════════════════
+   INFORME DE ASISTENCIA POR CURSO (Excel / PDF)
+════════════════════════════════════════════════ */
+async function abrirInformeCurso() {
+  const cs = await db.collection('liveClasses').get();
+  const cursos = new Map();
+  cs.docs.forEach(d => { const c = d.data(); const id = c.cursoId || slugCurso(c.courseName); if (id && !cursos.has(id)) cursos.set(id, c.courseName); });
+  if (!cursos.size) return toast('No hay cursos con clases.', 'info');
+  openModal(`
+    <h3>📊 Informe de asistencia por curso</h3>
+    <div class="form-group"><label>Curso</label>
+      <select id="inf_curso">${[...cursos.entries()].map(([id, n]) => `<option value="${id}">${escHtml(n)}</option>`).join('')}</select></div>
+    <p style="font-size:12.5px;color:var(--text-light)">Horas asistidas = tiempo entre Inicio y Cierre de sesión SENCE de cada clase (tope: duración de la clase).</p>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+      <button class="btn btn-info" onclick="generarInformeCurso('pdf')">📄 PDF</button>
+      <button class="btn btn-primary" onclick="generarInformeCurso('xlsx')">📥 Excel</button>
+    </div>`);
+}
+async function generarInformeCurso(formato) {
+  const cursoId = document.getElementById('inf_curso').value;
+  toast('⏳ Generando informe...', 'info', 2500);
+  try {
+    const cs = await db.collection('liveClasses').get();
+    const clases = cs.docs.map(d => ({ id: d.id, ...d.data() }))
+      .filter(c => (c.cursoId || slugCurso(c.courseName)) === cursoId)
+      .sort((a, b) => (a.scheduledAt?.toMillis?.() || 0) - (b.scheduledAt?.toMillis?.() || 0));
+    if (!clases.length) return toast('Sin clases.', 'warning');
+    const ids = clases.map(c => c.id);
+    let regs = [];
+    for (let i = 0; i < ids.length; i += 30) {
+      const s = await db.collection('senceAttendance').where('classId', 'in', ids.slice(i, i + 30)).get();
+      regs = regs.concat(s.docs.map(d => ({ id: d.id, ...d.data() })));
+    }
+    const ms = await db.collection('matriculas').where('cursoId', '==', cursoId).get();
+    const alumnos = new Map();
+    ms.docs.forEach(d => { const m = d.data(); alumnos.set(m.userId, { rut: m.rut, nombre: m.nombre }); });
+    regs.forEach(a => { if (!alumnos.has(a.userId)) alumnos.set(a.userId, { rut: a.runAlumno || '', nombre: a.userName || '' }); });
+
+    const claseById = new Map(clases.map(c => [c.id, c]));
+    const minDe = a => {
+      const ini = a.inicioSesion?.toDate?.(), fin = a.cierreSesion?.toDate?.();
+      if (!ini || !fin) return null;
+      const cl = claseById.get(a.classId);
+      return Math.max(0, Math.min(Math.round((fin - ini) / 60000), cl?.duration || 1e9));
+    };
+    const totalProg = clases.reduce((s, c) => s + (c.duration || 0), 0);
+    const filas = [...alumnos.entries()].map(([uid, al]) => {
+      const mias = regs.filter(r => r.userId === uid);
+      let tot = 0, asist = 0;
+      const celdas = clases.map(c => {
+        const rs = mias.filter(r => r.classId === c.id && r.inicioSesion);
+        if (!rs.length) return 'Ausente';
+        const mins = rs.map(minDe);
+        if (mins.every(m => m === null)) return 'Sin cierre';
+        const m = Math.min(mins.reduce((s, x) => s + (x || 0), 0), c.duration || 1e9);
+        tot += m; asist++; return m;
+      });
+      return { ...al, asist, tot, pct: totalProg ? Math.round(tot / totalProg * 1000) / 10 : 0, celdas };
+    }).sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+
+    const cab = clases[0], nombreCurso = cab.courseName || cursoId;
+    const fmtC = c => `${fmtDate(c.scheduledAt)} ${c.scheduledAt.toDate().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} ${c.title}`;
+    const hh = m => Math.round(m / 6) / 10;
+
+    if (formato === 'xlsx') {
+      const resumen = [
+        ['Informe de asistencia — ' + nombreCurso], ['Línea', cab.lineaCapacitacion, 'CodSence', cab.codSence || '', 'CodigoCurso', cab.codigoCurso || ''],
+        ['Generado', new Date().toLocaleString('es-CL'), 'Horas programadas', hh(totalProg)], [],
+        ['Alumno', 'RUT', 'Clases asistidas', 'Horas asistidas', '% asistencia', ...clases.map(fmtC)]
+      ];
+      filas.forEach(f => resumen.push([f.nombre, f.rut, `${f.asist}/${clases.length}`, hh(f.tot), f.pct, ...f.celdas]));
+      const detalle = [['RUT', 'Alumno', 'Clase', 'Fecha clase', 'Inicio SENCE', 'Cierre SENCE', 'Minutos', 'ID sesión SENCE', 'Estado']];
+      regs.sort((a, b) => (a.runAlumno || '').localeCompare(b.runAlumno || '')).forEach(a => detalle.push([
+        a.runAlumno || '', a.userName || '', a.classTitle || '', claseById.get(a.classId) ? fmtDate(claseById.get(a.classId).scheduledAt) : '',
+        a.inicioSesion ? fmtDateTime(a.inicioSesion) : '', a.cierreSesion ? fmtDateTime(a.cierreSesion) : '', minDe(a) ?? '', a.idSesionSence || '', a.estadoSesion || '']));
+      const wb = XLSX.utils.book_new();
+      const w1 = XLSX.utils.aoa_to_sheet(resumen); w1['!cols'] = [{ wch: 34 }, { wch: 13 }, { wch: 15 }, { wch: 15 }, { wch: 13 }, ...clases.map(() => ({ wch: 26 }))];
+      XLSX.utils.book_append_sheet(wb, w1, 'Resumen');
+      const w2 = XLSX.utils.aoa_to_sheet(detalle); w2['!cols'] = [{ wch: 13 }, { wch: 32 }, { wch: 40 }, { wch: 12 }, { wch: 18 }, { wch: 18 }, { wch: 9 }, { wch: 40 }, { wch: 12 }];
+      XLSX.utils.book_append_sheet(wb, w2, 'Detalle');
+      XLSX.writeFile(wb, `asistencia_${cursoId}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } else {
+      const { jsPDF } = window.jspdf; const doc = new jsPDF();
+      let y = 18;
+      const head = () => { doc.setFontSize(13); doc.text('Informe de asistencia — ' + nombreCurso.slice(0, 60), 14, 14); doc.setFontSize(9);
+        doc.text(`Generado ${new Date().toLocaleString('es-CL')} · Horas programadas: ${hh(totalProg)} · Clases: ${clases.length}`, 14, 20);
+        doc.setFont(undefined, 'bold'); doc.text('Alumno', 14, 28); doc.text('RUT', 100, 28); doc.text('Clases', 135, 28); doc.text('Horas', 158, 28); doc.text('%', 182, 28); doc.setFont(undefined, 'normal'); y = 34; };
+      head();
+      filas.forEach(f => { if (y > 280) { doc.addPage(); head(); }
+        doc.text(String(f.nombre).slice(0, 48), 14, y); doc.text(String(f.rut), 100, y); doc.text(`${f.asist}/${clases.length}`, 135, y); doc.text(String(hh(f.tot)), 158, y); doc.text(f.pct + '%', 182, y); y += 6; });
+      doc.save(`asistencia_${cursoId}_${new Date().toISOString().slice(0, 10)}.pdf`);
+    }
+    closeModal(); toast('✅ Informe generado.', 'success');
+  } catch (e) { toast('❌ ' + e.message, 'error', 8000); }
+}
+
+/* ════════════════════════════════════════════════
+   ALERTA: SESIONES SENCE ABIERTAS DEMASIADO TIEMPO
+════════════════════════════════════════════════ */
+function bannerSesionesLargas(docs) {
+  const ahora = Date.now();
+  const largas = docs.filter(d => {
+    const a = d.data(); const ini = a.inicioSesion?.toMillis?.(); const ls = a.lastSeen?.toMillis?.();
+    return a.estadoSesion === 'abierta' && ((ini && ahora - ini > 9 * 3600e3) || (ls && ahora - ls > 30 * 60e3));
+  });
+  if (!largas.length) return '';
+  return `<div class="card" style="border:2px solid var(--warning);background:#fff8ee">
+    <strong>⚠️ ${largas.length} sesión(es) SENCE abierta(s) por demasiado tiempo o sin actividad</strong>
+    <div style="font-size:13px;margin:6px 0">${largas.slice(0, 6).map(d => escHtml(d.data().userName || d.data().runAlumno || '')).join(', ')}${largas.length > 6 ? '…' : ''}</div>
+    <button class="btn btn-sm btn-warning" onclick="navigate('attendance')">Revisar y cerrar</button></div>`;
+}
+
+/* ════════════════════════════════════════════════
+   PROFESORES: CARGA MASIVA
+════════════════════════════════════════════════ */
+function showProfesoresMasivo() {
+  openModal(`
+    <h3>📋 Carga masiva de profesores</h3>
+    <p style="font-size:13px;color:var(--text-mid)">Una línea por profesor: <code>RUT;Nombre completo</code> (o pegado desde Excel con tabulación). Contraseña inicial: últimos 6 dígitos del RUT.</p>
+    <textarea id="pm_texto" rows="8" style="width:100%" placeholder="12345678-9;Mariela Andrea Arancibia Cortez"></textarea>
+    <div id="pm_estado" style="font-size:13px;margin-top:8px"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+      <button class="btn btn-primary" id="pm_btn" onclick="crearProfesoresMasivo()">✅ Crear</button>
+    </div>`, true);
+}
+async function crearProfesoresMasivo() {
+  const lineas = document.getElementById('pm_texto').value.split(/\n+/).map(l => l.trim()).filter(Boolean);
+  const items = [], malos = [];
+  lineas.forEach(l => {
+    const partes = l.split(/[;\t,]/).map(p => p.trim()).filter(Boolean);
+    const rutP = partes.find(p => /^[\d.]+-?[\dkK]$/.test(p.replace(/\s/g, '')));
+    const nom = partes.find(p => p !== rutP);
+    const rut = rutP ? _normRutTxt(rutP) : '';
+    if (rut && nom && validarRut(rut)) items.push({ rut, nombre: nom }); else malos.push(l);
+  });
+  if (!items.length) return toast('⚠️ No hay líneas válidas.', 'warning');
+  const btn = document.getElementById('pm_btn'), est = document.getElementById('pm_estado'); btn.disabled = true;
+  let ok = 0, ya = 0, err = 0;
+  for (const it of items) {
+    est.textContent = `Procesando ${ok + ya + err + 1}/${items.length}: ${it.nombre}...`;
+    try {
+      const ex = await db.collection('users').where('rut', '==', it.rut).limit(1).get();
+      if (!ex.empty) { ya++; continue; }
+      const cred = await secondaryAuth.createUserWithEmailAndPassword(rutToEmail(it.rut), rutToPassword(it.rut));
+      await cred.user.updateProfile({ displayName: it.nombre });
+      await db.collection('users').doc(cred.user.uid).set({ uid: cred.user.uid, email: rutToEmail(it.rut), name: it.nombre, rut: it.rut, role: 'teacher', createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+      await secondaryAuth.signOut(); ok++;
+    } catch (e) {
+      if (e.code === 'auth/email-already-in-use') { err++; est.innerHTML += `<br>⚠️ ${escHtml(it.rut)}: cuenta antigua huérfana — créalo individualmente para repararla.`; }
+      else { err++; console.warn(it.nombre, e.message); }
+    }
+  }
+  est.innerHTML = `<strong>Listo:</strong> ${ok} creados · ${ya} ya existían · ${err} con error${malos.length ? ' · ' + malos.length + ' líneas inválidas' : ''}`;
+  btn.disabled = false; cargarListaProfesores();
+}
+
+/* ════════════════════════════════════════════════
+   BARRA DE ACCESIBILIDAD
+════════════════════════════════════════════════ */
+function a11yAplicar() {
+  let z = 1, hc = false;
+  try { z = parseFloat(localStorage.getItem('a11yZoom')) || 1; hc = localStorage.getItem('a11yHC') === '1'; } catch (e) {}
+  document.documentElement.style.setProperty('--a11y-zoom', z);
+  document.body.classList.toggle('a11y-hc', hc);
+}
+function a11yZoom(delta) {
+  let z = 1; try { z = parseFloat(localStorage.getItem('a11yZoom')) || 1; } catch (e) {}
+  z = delta === 0 ? 1 : Math.min(1.5, Math.max(0.9, Math.round((z + delta) * 100) / 100));
+  try { localStorage.setItem('a11yZoom', z); } catch (e) {}
+  a11yAplicar();
+}
+function a11yContraste() {
+  let hc = false; try { hc = localStorage.getItem('a11yHC') === '1'; } catch (e) {}
+  try { localStorage.setItem('a11yHC', hc ? '0' : '1'); } catch (e) {}
+  a11yAplicar();
+}
+document.addEventListener('DOMContentLoaded', a11yAplicar);
+
+/* ════════════════════════════════════════════════
    VISTA: SALA DEL PROFESOR (Teacher Room)
    ─────────────────────────────────────────────
    Al entrar: registra su presencia y activa clase.
@@ -3290,6 +3974,9 @@ async function renderTeacherRoom(mc, params={}) {
   const doc = await db.collection('liveClasses').doc(classId).get();
   if (!doc.exists) { mc.innerHTML='<div class="empty-state"><div class="icon">❌</div><p>Clase no encontrada.</p></div>'; return; }
   const cls = doc.data();
+  if (cls.profesorUid && cls.profesorUid !== currentUser.uid) {
+    mc.innerHTML='<div class="empty-state"><div class="icon">🔒</div><p>Esta clase está asignada a otro profesor.</p></div>'; return;
+  }
 
   const teacherName = currentUser.displayName || currentUser.email.split('@')[0];
   const duracionMin = cls.duration || 60;
@@ -3646,7 +4333,7 @@ function initClassChat(classId) {
   const cont = document.getElementById('classChatMessages');
   if (!cont) return;
   _chatListener = db.collection('liveClasses').doc(classId).collection('chat')
-    .orderBy('createdAt', 'asc').limitToLast(100)
+    .orderBy('createdAt', 'asc').limitToLast(30)
     .onSnapshot(snap => {
       const cont2 = document.getElementById('classChatMessages');
       if (!cont2) return;
@@ -4141,7 +4828,7 @@ async function cargarForo() {
       <button class="btn btn-primary btn-sm" onclick="enviarMensajeForo('${escHtml(curso).replace(/'/g,"\\'")}')">Publicar</button>
     </div>`;
   _foroListener = db.collection('foroMensajes').where('curso','==',curso)
-    .orderBy('createdAt','asc').limitToLast(200)
+    .orderBy('createdAt','asc').limitToLast(50)
     .onSnapshot(snap => {
       const box = document.getElementById('foroMensajes');
       if (!box) return;
@@ -4179,5 +4866,11 @@ async function enviarMensajeForo(curso) {
 ════════════════════════════════════════════════ */
 
 </script>
+<div class="a11y-bar" role="toolbar" aria-label="Accesibilidad">
+  <button onclick="a11yZoom(-0.1)" aria-label="Reducir tamaño de texto" title="Reducir texto">A−</button>
+  <button onclick="a11yZoom(0)" aria-label="Tamaño de texto normal" title="Normal">A</button>
+  <button onclick="a11yZoom(0.1)" aria-label="Aumentar tamaño de texto" title="Aumentar texto">A+</button>
+  <button onclick="a11yContraste()" aria-label="Alto contraste" title="Alto contraste">◐</button>
+</div>
 </body>
 </html>
