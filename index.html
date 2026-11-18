@@ -894,6 +894,7 @@ const SENCE_GLOSAS = {
   'INASEP-500': 'Error interno al registrar la respuesta de SENCE. Reporta a tu OTEC.'
 };
 function estadoBadge(a) {
+  if (a.sessionOpen && a.bloqueCerrado === true) return '<span class="badge badge-orange">⚠️ Falta cerrar en SENCE</span>';
   if (a.sessionOpen) return '<span class="badge badge-green">✅ Abierta</span>';
   if (a.estadoSesion === 'pendiente') return '<span class="badge badge-gray">⏳ Sin completar</span>';
   if (a.estadoSesion === 'error') return `<span class="badge badge-red">❌ Error SENCE ${escHtml(a.ultimoError||'')}</span>`;
@@ -1094,6 +1095,8 @@ function navigate(view, params={}) {
     if (_teacherClassTimer) { clearInterval(_teacherClassTimer); _teacherClassTimer = null; }
     if (_teacherRTListener) { _teacherRTListener(); _teacherRTListener = null; }
   }
+  if (_claseListener) { _claseListener(); _claseListener = null; }
+  if (_avisoCierreTimer) { clearInterval(_avisoCierreTimer); _avisoCierreTimer = null; }
   if (_chatListener) { _chatListener(); _chatListener = null; }
   if (_foroListener) { _foroListener(); _foroListener = null; }
   currentView = view;
@@ -1297,11 +1300,11 @@ async function renderLiveClasses(mc) {
         ? `<button class="btn btn-sm btn-warning" onclick="event.stopPropagation();editClass('${doc.id}')">✏️ Editar</button>
            <button class="btn btn-sm btn-danger"  onclick="event.stopPropagation();deleteClass('${doc.id}')">🗑️</button>
            <button class="btn btn-sm ${isLive?'btn-danger':'btn-success'}" onclick="event.stopPropagation();toggleClassStatus('${doc.id}','${c.status}')">
-             ${isLive?'⏹ Finalizar':'▶️ Iniciar'}
+             ${isLive?'⏹ Cerrar bloque':(isPast?'↩️ Reabrir':'▶️ Iniciar bloque')}
            </button>`
         : currentRole === 'teacher'
         ? `<button class="btn btn-sm ${isLive?'btn-live':'btn-primary'}" onclick="navigate('teacher-room',{id:'${doc.id}'})">
-             ${isLive ? '👨‍🏫 Entrar como Profesor' : '👁️ Ver Clase'}
+             ${isPast ? '👁️ Ver bloque' : (isLive ? '👨‍🏫 Entrar (en curso)' : '▶️ Entrar / iniciar bloque')}
            </button>`
         : `<button class="btn btn-sm btn-primary" onclick="navigate('class-room',{id:'${doc.id}'})">
              ${isLive ? '🔴 Entrar EN VIVO' : '👁️ Ver Clase'}
@@ -1359,6 +1362,14 @@ async function renderNewClass(mc, params={}) {
         </div>
       </div>
 
+      ${data?.segmentos?.length ? `
+      <div class="form-group" id="fc_tramosInfo">
+        <label>Tramos del bloque (asignatura · profesor)</label>
+        <div style="font-size:13px;line-height:1.9;border:1px solid var(--border);border-radius:8px;padding:8px 12px">
+          ${data.segmentos.map(sg => `<div><span style="font-family:'DM Mono'">${escHtml(sg.ini)}–${escHtml(sg.fin)}</span> · ${escHtml(sg.titulo)} · <em>${escHtml(sg.profesorNombre||'sin profesor')}</em></div>`).join('')}
+        </div>
+        <small>Los tramos y sus profesores se definen al importar el Excel. Para cambiarlos, elimina el bloque y vuelve a importar.</small>
+      </div>` : `
       <div class="form-group">
         <label>Profesor / Capacitador</label>
         <select id="fc_profesor">
@@ -1366,7 +1377,7 @@ async function renderNewClass(mc, params={}) {
           ${_profsForm.map(p => `<option value="${p.uid}" ${data?.profesorUid===p.uid?'selected':''}>${escHtml(p.name)} (${escHtml(p.rut)})</option>`).join('')}
         </select>
         <small>El profesor asignado verá esta clase en "Mis Clases".</small>
-      </div>
+      </div>`}
 
       <div class="form-group">
         <label>Descripción</label>
@@ -1557,10 +1568,11 @@ async function saveClass(id) {
   if (!testOk(codigoCurso) && (codigoCurso.length < minCurso || codigoCurso.length > 50)) return toast(`⚠️ El CodigoCurso debe tener entre ${minCurso} y 50 caracteres.`,'warning');
   if (linea === 1 && !codigoModulo) return toast('⚠️ Línea 1 (Programas Sociales): indica el Código de Módulo SIC de esta clase.','warning');
 
-  const profUid = document.getElementById('fc_profesor')?.value || '';
-  const profSel = profUid ? document.getElementById('fc_profesor').selectedOptions[0].textContent.replace(/\s*\(.*\)\s*$/, '') : '';
+  const selProf = document.getElementById('fc_profesor');   // no existe en bloques con tramos (se conservan)
+  const profUid = selProf?.value || '';
+  const profSel = profUid ? selProf.selectedOptions[0].textContent.replace(/\s*\(.*\)\s*$/, '') : '';
   const data = {
-    title, courseName, cursoId: slugCurso(courseName), profesorUid: profUid, profesorNombre: profSel, description,
+    title, courseName, cursoId: slugCurso(courseName), ...(selProf ? { profesorUid: profUid, profesorNombre: profSel, profesoresUids: profUid ? [profUid] : [] } : {}), description,
     scheduledAt: firebase.firestore.Timestamp.fromDate(new Date(dateVal)),
     duration, codSence: linea === 1 ? '' : codSence, codigoCurso, codigoModulo, lineaCapacitacion: linea,
     status, videoType, videoUrl, jitsiRoom, capacidadEstimada,
@@ -1600,9 +1612,10 @@ async function deleteClass(id) {
 }
 
 async function toggleClassStatus(id, current) {
-  const newStatus = current === 'active' ? 'finished' : 'active';
-  await db.collection('liveClasses').doc(id).update({ status: newStatus });
-  toast(`✅ Clase ${newStatus==='active'?'iniciada en vivo':'finalizada'}.`,'success');
+  try {
+    const j = await bloqueAccion(current === 'active' ? 'cerrar' : 'iniciar', id);
+    toast(current === 'active' ? `✅ Bloque cerrado.${j.sesionesSinCerrar ? ' ' + j.sesionesSinCerrar + ' alumno(s) sin cerrar sesión SENCE.' : ''}` : '✅ Bloque iniciado: los alumnos ya pueden registrarse en SENCE.', 'success', 6000);
+  } catch (e) { toast('❌ ' + e.message, 'error', 8000); return; }
   navigate('live-classes');
 }
 
@@ -1708,9 +1721,11 @@ async function renderClassRoom(mc, params={}) {
               Al terminar volverás automáticamente a esta clase.
             </div>
           </div>
-          <button class="btn btn-sence" id="btnSenceIni" ${myRut ? '' : 'disabled'} onclick="iniciarSesionSence('${classId}')">
+          ${cls.status === 'active' ? `<button class="btn btn-sence" id="btnSenceIni" ${myRut ? '' : 'disabled'} onclick="iniciarSesionSence('${classId}')">
             🇨🇱 Iniciar Sesión SENCE con ClaveÚnica
-          </button>
+          </button>` : (cls.status === 'finished'
+            ? '<div class="attendance-status pending"><div class="attendance-dot dot-orange"></div><div><strong>Este bloque ya finalizó.</strong> Ya no se puede registrar asistencia en él.</div></div>'
+            : '<div class="attendance-status pending" id="esperaProfe"><div class="attendance-dot dot-orange"></div><div><strong>⏳ Esperando que el profesor inicie el bloque.</strong> El botón para registrar tu sesión SENCE se habilitará automáticamente cuando comience.</div></div>')}
         </div>` : `
         <!-- SESIÓN ABIERTA -->
         <div class="attendance-status open">
@@ -1726,11 +1741,14 @@ async function renderClassRoom(mc, params={}) {
             Inicio: ${att?.inicioSesion ? fmtDateTime(att.inicioSesion) : '—'}
           </small>
         </div>
+        ${cls.status === 'finished' ? '<div class="attendance-status pending"><div class="attendance-dot dot-orange"></div><div><strong>⚠️ El profesor cerró el bloque.</strong> Cierra ahora tu sesión SENCE para registrar tu salida.</div></div>' : ''}
         <button class="btn btn-danger" onclick="cerrarSesionSence('${att?.id||''}')">
           🚪 Cerrar Sesión SENCE (al terminar la clase)
         </button>`}
       </div>
     </div>
+
+    ${htmlTramos(cls)}
 
     <!-- VIDEO -->
     <div class="card" style="padding:0;overflow:hidden">
@@ -1765,10 +1783,12 @@ async function renderClassRoom(mc, params={}) {
     </div>` : ''}`;
 
   initClassChat(classId);
+  if (currentRole === 'student') escucharEstadoClase(classId, cls.status, sessionOpen ? att.id : '');
 
   // Cronómetro si sesión abierta
   if (sessionOpen && att?.inicioSesion) {
-    startTimer(att.inicioSesion.toDate(), cls.duration || 60);
+    const finBloque = cls.scheduledAt?.toDate ? new Date(cls.scheduledAt.toDate().getTime() + (cls.duration || 60) * 60000) : null;
+    startTimer(att.inicioSesion.toDate(), cls.duration || 60, finBloque);
     startHeartbeat(att.id); // ← heartbeat activo mientras sesión abierta
   }
 
@@ -1813,7 +1833,7 @@ function stopHeartbeat() {
 }
 
 /* Cronómetro */
-function startTimer(startDate, durationMin) {
+function startTimer(startDate, durationMin, endDate) {
   if (sessionTimer) clearInterval(sessionTimer);
   const box = document.getElementById('sessionTimerBox');
 
@@ -1829,13 +1849,13 @@ function startTimer(startDate, durationMin) {
     }
     const remEl = document.getElementById('timerRemaining');
     if (remEl) {
-      const r = durationMin * 60 - elapsed;
+      const r = endDate ? Math.floor((endDate - now) / 1000) : durationMin * 60 - elapsed;
       remEl.textContent = r > 0
         ? `Tiempo restante: ${String(Math.floor(r/3600)).padStart(2,'0')}:${String(Math.floor((r%3600)/60)).padStart(2,'0')}:${String(r%60).padStart(2,'0')}`
         : 'Tiempo de clase cumplido — cierra tu sesión SENCE';
     }
     if (box) {
-      const remaining = durationMin * 60 - elapsed;
+      const remaining = endDate ? Math.floor((endDate - now) / 1000) : durationMin * 60 - elapsed;
       box.className = 'session-timer';
       if (remaining <= 0)  box.classList.add('timer-danger');
       else if (remaining <= 600) {
@@ -1917,10 +1937,10 @@ async function iniciarSesionSence(classId) {
   }
 }
 
-async function cerrarSesionSence(sessionId) {
+async function cerrarSesionSence(sessionId, sinConfirmar) {
   if (!sessionId) return toast('⚠️ No tienes una sesión SENCE abierta.', 'warning');
   if (!await loadSenceConfig()) return;
-  if (!confirm('¿Confirmas cerrar tu sesión SENCE? Serás llevado a SENCE para ingresar nuevamente con ClaveÚnica y registrar el cierre.')) return;
+  if (!sinConfirmar && !confirm('¿Confirmas cerrar tu sesión SENCE? Serás llevado a SENCE para ingresar nuevamente con ClaveÚnica y registrar el cierre.')) return;
   try {
     const res  = await workerFetch('/api/sence/cerrar', { method: 'POST', body: JSON.stringify({ sessionId }) });
     const data = await res.json().catch(() => ({}));
@@ -2486,6 +2506,7 @@ function parseBulkLine(line) {
 }
 
 let _bulkAlumnos = [];
+let _teacherClassId = null;
 
 function previewBulk() {
   const text = document.getElementById('bulkTable').value.trim();
@@ -2961,13 +2982,19 @@ async function construirPayloadSIC() {
   const clases = clsSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => Number(c.lineaCapacitacion) === 1); // SIC aplica solo a Programas Sociales
   if (!clases.length) { toast(`⚠️ No hay clases de Programas Sociales (línea 1) con CodigoCurso "${cursoRce}". El envío al SIC no aplica a Franquicia Tributaria.`, 'warning', 9000); return null; }
 
+  // Unidad SIC = tramo (asignatura) de un bloque; las clases antiguas sin tramos son una unidad
+  const unidades = [];
+  clases.forEach(c => {
+    if (c.segmentos?.length) c.segmentos.forEach((sg, i) => unidades.push({ key: `${c.id}#${i}`, cls: c, seg: sg, codigoModulo: sg.codModulo || c.codigoModulo, title: sg.titulo }));
+    else unidades.push({ key: c.id, cls: c, seg: null, codigoModulo: c.codigoModulo, title: c.title });
+  });
   const codigos = new Set(cfg.modulos.map(m => m.codigo));
-  const sinModulo = clases.filter(c => !codigos.has(c.codigoModulo));
+  const sinModulo = unidades.filter(u => !codigos.has(u.codigoModulo));
   if (sinModulo.length) {
-    toast('⚠️ Clases sin un código de módulo válido (edítalas): ' + sinModulo.map(c => c.title).join(', '), 'warning', 10000);
+    toast('⚠️ Tramos/clases sin un código de módulo válido (edítalos): ' + [...new Set(sinModulo.map(u => u.title))].join(', '), 'warning', 10000);
     return null;
   }
-  const modsVacios = cfg.modulos.filter(m => !clases.some(c => c.codigoModulo === m.codigo));
+  const modsVacios = cfg.modulos.filter(m => !unidades.some(u => u.codigoModulo === m.codigo));
   if (modsVacios.length) {
     toast('⚠️ Cada módulo debe tener al menos una clase. Sin clases: ' + modsVacios.map(m => m.codigo).join(', '), 'warning', 10000);
     return null;
@@ -2985,10 +3012,23 @@ async function construirPayloadSIC() {
     const c = claseById[a.classId]; if (!c) return;
     const [rn, dv] = a.runAlumno.replace(/\./g, '').split('-');
     const al = ensure(rn, (dv || '').toLowerCase());
-    const seg = Math.max(0, Math.floor((toDate(a.cierreSesion) - toDate(a.inicioSesion)) / 1000));
-    const cap = (c.duration || 60) * 60; // tope: duración planificada de la clase
-    al.segMod[c.codigoModulo] = (al.segMod[c.codigoModulo] || 0) + Math.min(seg, cap);
-    al.asistidas.add(c.id);
+    if (c.segmentos?.length) {
+      // por tramo: solo el tiempo de la sesión dentro de la ventana oficial del bloque y del tramo
+      const iv = intervaloValido(a, c);
+      c.segmentos.forEach((sg, i) => {
+        const segs = minutosEnTramo(iv, c, sg) * 60;
+        if (segs > 0) {
+          const cm = sg.codModulo || c.codigoModulo;
+          al.segMod[cm] = (al.segMod[cm] || 0) + segs;
+          al.asistidas.add(`${c.id}#${i}`);
+        }
+      });
+    } else {
+      const seg = Math.max(0, Math.floor((toDate(a.cierreSesion) - toDate(a.inicioSesion)) / 1000));
+      const cap = (c.duration || 60) * 60; // tope: duración planificada de la clase
+      al.segMod[c.codigoModulo] = (al.segMod[c.codigoModulo] || 0) + Math.min(seg, cap);
+      al.asistidas.add(c.id);
+    }
   });
   cfg.nomina.forEach(r => { const [rn, dv] = r.split('-'); ensure(rn, dv.toLowerCase()); });
   if (!Object.keys(alumnos).length) { toast('⚠️ No hay alumnos con sesiones cerradas ni nómina adicional.', 'warning', 6000); return null; }
@@ -3002,10 +3042,10 @@ async function construirPayloadSIC() {
   const listaAlumnos = Object.values(alumnos).map(al => {
     const prev = progPrev[al.rutNum] || { a: 0, m: {} };
     const modulos = cfg.modulos.map(m => {
-      const cm = clases.filter(c => c.codigoModulo === m.codigo);
-      const asist = cm.filter(c => al.asistidas.has(c.id)).length;
+      const cm = unidades.filter(u => u.codigoModulo === m.codigo);
+      const asist = cm.filter(u => al.asistidas.has(u.key)).length;
       const av = Math.max(pct(asist, cm.length), prev.m?.[m.codigo] || 0);
-      const titulos = [...new Set(cm.map(c => String(c.title || 'Clase en vivo').slice(0, 50)))];
+      const titulos = [...new Set(cm.map(u => String(u.title || 'Clase en vivo').slice(0, 50)))];
       return {
         codigoModulo: m.codigo,
         tiempoConectividad: al.segMod[m.codigo] || 0,
@@ -3018,7 +3058,7 @@ async function construirPayloadSIC() {
         listaActividades: titulos.map(t => ({ codigoActividad: t }))
       };
     });
-    const avCurso = Math.max(pct(al.asistidas.size, clases.length), prev.a || 0);
+    const avCurso = Math.max(pct(al.asistidas.size, unidades.length), prev.a || 0);
     progresoNuevo[al.rutNum] = { a: avCurso, m: Object.fromEntries(modulos.map(x => [x.codigoModulo, x.porcentajeAvance])) };
     return {
       rutAlumno: parseInt(al.rutNum, 10),
@@ -3037,7 +3077,7 @@ async function construirPayloadSIC() {
     codigoOferta: cfg.codigoOferta,
     codigoGrupo:  cfg.codigoGrupo || cfg.codigoOferta,
     ...(cfg.codigoEnvio ? { codigoEnvio: cfg.codigoEnvio } : {}),
-    cantActividadSincronica:  clases.length,
+    cantActividadSincronica:  unidades.length,
     cantActividadAsincronica: cfg.cantAsinc,
     listaAlumnos
   };
@@ -3402,7 +3442,7 @@ async function cargarMisMatriculas() {
 /* ¿Este usuario ve esta clase? (admin: todas · profesor: las suyas · alumno: cursos matriculados) */
 function puedeVerClase(c, mats) {
   if (currentRole === 'admin') return true;
-  if (currentRole === 'teacher') return c.profesorUid === currentUser.uid || (!c.profesorUid && !c.profesorNombre);
+  if (currentRole === 'teacher') return (c.profesoresUids || []).includes(currentUser.uid) || c.profesorUid === currentUser.uid || (!c.profesorUid && !c.profesorNombre && !(c.profesoresUids || []).length);
   return !c.cursoId || (mats && mats.has(c.cursoId));
 }
 /* Validación de campos SENCE a nivel curso (misma regla que saveClass y el Worker) */
@@ -3453,6 +3493,11 @@ async function renderImportClasses(mc) {
       <div class="form-row">
         <div class="form-group"><label>Código de módulo SIC por defecto (solo línea 1)</label>
           <input type="text" id="im_codModulo" placeholder="Opcional si el Excel trae la columna 'Código módulo'"></div>
+        <div class="form-group"><label>Hora de almuerzo por defecto (opcional)</label>
+          <input type="text" id="im_almuerzo" placeholder="Ej: 13:00 a 14:00 — corta el día en mañana y tarde">
+          <small>Solo se usa en los días donde el Excel no trae una fila "Almuerzo".</small></div>
+      </div>
+      <div class="form-row">
         <div class="form-group"><label>Videoconferencia</label>
           <select id="im_videoType" onchange="document.getElementById('im_videoUrlBox').style.display = this.value==='jitsi' ? 'none' : 'block'">
             <option value="jitsi">🟢 Jitsi (una sala por clase, automática)</option>
@@ -3460,7 +3505,7 @@ async function renderImportClasses(mc) {
             <option value="zoom">💙 Zoom (mismo enlace para todas)</option>
             <option value="teams">🟦 Microsoft Teams (mismo enlace para todas)</option>
             <option value="custom">🔗 URL personalizada (mismo enlace para todas)</option>
-          </select></div>
+          </select><small>Una sola sala por bloque: los profesores se relevan en el mismo enlace.</small></div>
       </div>
       <div class="form-group" id="im_videoUrlBox" style="display:none"><label>URL de la videoconferencia *</label>
         <input type="url" id="im_videoUrl" placeholder="https://..."></div>
@@ -3470,7 +3515,8 @@ async function renderImportClasses(mc) {
       <div class="card-header"><h3>2️⃣ Archivo Excel (.xlsx) o CSV</h3></div>
       <p style="font-size:13px;color:var(--text-mid);margin-bottom:10px">
         Columnas: <strong>Fecha · Horario clases · Asignatura · Nombre del capacitador</strong> (opcional: <em>Código módulo</em>).
-        Horario con formato <code>09:15 a 17:30</code>. Cada fila es una clase.</p>
+        Horario con formato <code>09:15 a 17:30</code>. Cada fila es un tramo; el programa los agrupa en <strong>bloques SENCE</strong> (mañana / tarde).
+        Para marcar el almuerzo agrega una fila con la asignatura <code>Almuerzo</code> (o Colación / Receso) y su horario; también se corta solo si hay un hueco de 30 min o más.</p>
       <input type="file" id="im_file" accept=".xlsx,.xls,.csv">
       <div style="margin-top:12px"><button class="btn btn-primary" onclick="previsualizarImportacion()">🔍 Previsualizar</button></div>
     </div>
@@ -3481,8 +3527,9 @@ async function renderImportClasses(mc) {
 function descargarPlantillaClases() {
   const aoa = [
     ['Fecha', 'Horario clases', 'Asignatura', 'Nombre del capacitador', 'Código módulo (solo línea 1)'],
-    ['23-11-2026', '09:15 a 12:15', 'Ejemplo: Legislación aplicada', 'Nombre Apellido Apellido', ''],
-    ['23-11-2026', '12:15 a 14:30', 'Ejemplo: Seguridad de las instalaciones', 'Nombre Apellido Apellido', ''],
+    ['23-11-2026', '09:15 a 13:00', 'Ejemplo: Legislación aplicada', 'Nombre Apellido Apellido', ''],
+    ['23-11-2026', '13:00 a 14:00', 'Almuerzo', '', ''],
+    ['23-11-2026', '14:00 a 17:30', 'Ejemplo: Seguridad de las instalaciones', 'Nombre Apellido Apellido', ''],
   ];
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{ wch: 12 }, { wch: 16 }, { wch: 48 }, { wch: 34 }, { wch: 26 }];
@@ -3526,6 +3573,76 @@ function matchProfesor(nombre, profs) {
   return cand.length === 1 ? cand[0] : null;
 }
 
+const GAP_CORTE = 30; // minutos: un hueco o pausa de 30 min o más separa un bloque de otro (almuerzo)
+const RE_BREAK = /^(almuerzo|colacion|break|receso|descanso|pausa)\b/;
+const _mm = (h, n) => h * 60 + n;
+const _hhmm = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+const _ymd = f => `${f.y}-${String(f.m).padStart(2, '0')}-${String(f.d).padStart(2, '0')}`;
+const _p2 = n => String(n).padStart(2, '0');
+
+/* Agrupa las filas del Excel en BLOQUES SENCE (mañana / tarde). Cada bloque = una sesión SENCE del alumno.
+   Dentro del bloque, cada asignatura es un "tramo" con su profesor. El almuerzo corta el bloque. */
+function construirBloques(rows, almDef) {
+  const porDia = new Map();
+  rows.filter(r => r.start && r.h && r.h.dur > 0 && !r.errores.length).forEach(r => {
+    if (!porDia.has(r.day)) porDia.set(r.day, []);
+    porDia.get(r.day).push(r);
+  });
+  const out = [];
+  [...porDia.keys()].sort().forEach(day => {
+    const rs = porDia.get(day);
+    const f = rs[0].f;
+    let breaks = rs.filter(r => r.esBreak && (r.b - r.a) >= GAP_CORTE).map(r => ({ a: r.a, b: r.b }));
+    const cortos = rs.filter(r => r.esBreak && (r.b - r.a) < GAP_CORTE).length;
+    const segsIn = rs.filter(r => !r.esBreak).sort((x, y) => x.a - y.a);
+    if (!segsIn.length) return;
+    const minA = Math.min(...segsIn.map(s => s.a)), maxB = Math.max(...segsIn.map(s => s.b));
+    let usoAlmDef = false;
+    // si el propio horario ya trae un hueco de 30 min o más, ese hueco es el almuerzo: no se aplica el valor por defecto
+    const hayHueco = segsIn.some((sg, i) => i > 0 && sg.a - Math.max(...segsIn.slice(0, i).map(x => x.b)) >= GAP_CORTE);
+    if (!breaks.length && !hayHueco && almDef && minA < almDef.a && maxB > almDef.b) {
+      breaks = [{ a: almDef.a, b: almDef.b }]; usoAlmDef = true;
+    }
+    let piezas = segsIn.map(s => ({ a: s.a, b: s.b, asig: s.asig, cap: s.cap, codMod: s.codMod, fila: s.fila, dividido: false }));
+    breaks.sort((x, y) => x.a - y.a).forEach(br => {
+      const np = [];
+      piezas.forEach(p => {
+        if (p.b <= br.a || p.a >= br.b) { np.push(p); return; }
+        if (p.a < br.a) np.push({ ...p, b: br.a, dividido: true });
+        if (p.b > br.b) np.push({ ...p, a: br.b, dividido: true });
+      });
+      piezas = np;
+    });
+    piezas.sort((x, y) => x.a - y.a || x.b - y.b);
+    const grupos = []; let cur = null;
+    piezas.forEach(p => {
+      const corta = cur && (p.a - cur.b >= GAP_CORTE || breaks.some(br => cur.b <= br.a && p.a >= br.b));
+      if (!cur || corta) { cur = { segs: [], a: p.a, b: p.b }; grupos.push(cur); }
+      cur.segs.push(p); cur.b = Math.max(cur.b, p.b);
+    });
+    grupos.forEach((g, i) => {
+      const start = new Date(f.y, f.m - 1, f.d, Math.floor(g.a / 60), g.a % 60);
+      const dur = g.b - g.a;
+      const net = g.segs.reduce((s, p) => s + (p.b - p.a), 0);
+      let franja;
+      if (grupos.length === 2) franja = i === 0 ? 'Mañana' : 'Tarde';
+      else if (grupos.length === 1) franja = (g.a < 780 && g.b > 840) ? 'Jornada completa' : (g.a < 780 ? 'Mañana' : 'Tarde');
+      else franja = 'Bloque ' + (i + 1);
+      const asigs = [...new Set(g.segs.map(p => p.asig))];
+      const avisos = [];
+      if (dur > 360) avisos.push(`Bloque continuo de ${Math.round(dur / 6) / 10} h: ¿falta el almuerzo?`);
+      for (let k = 1; k < g.segs.length; k++) if (g.segs[k].a < g.segs[k - 1].b) { avisos.push('Tramos traslapados'); break; }
+      if (cortos) avisos.push('Hay un break corto (<30 min): no separa el bloque');
+      if (usoAlmDef) avisos.push('Almuerzo aplicado por defecto');
+      if (g.segs.some(p => p.dividido)) avisos.push('Una asignatura se dividió por el almuerzo');
+      if (start < new Date(new Date().setHours(0, 0, 0, 0))) avisos.push('Fecha pasada');
+      out.push({ day, start, a: g.a, b: g.b, dur, net, franja, segs: g.segs, avisos, dup: false,
+        title: `${franja} — ${asigs.join(' / ')}`.slice(0, 150) });
+    });
+  });
+  return out;
+}
+
 async function previsualizarImportacion() {
   const curso = document.getElementById('im_curso').value.trim();
   const linea = parseInt(document.getElementById('im_linea').value);
@@ -3534,6 +3651,7 @@ async function previsualizarImportacion() {
   const codModDef = document.getElementById('im_codModulo').value.trim();
   const videoType = document.getElementById('im_videoType').value;
   const videoUrl = document.getElementById('im_videoUrl').value.trim();
+  const almTxt = (document.getElementById('im_almuerzo')?.value || '').trim();
   const file = document.getElementById('im_file').files[0];
   const box = document.getElementById('im_preview');
 
@@ -3542,6 +3660,12 @@ async function previsualizarImportacion() {
   const eSence = validarCamposSence(linea, codSence, codigoCurso, codModDef);
   if (eSence) return toast('⚠️ ' + eSence, 'warning', 6000);
   if (videoType !== 'jitsi' && !/^https:\/\//i.test(videoUrl)) return toast('⚠️ Ingresa la URL (https://) de la videoconferencia.', 'warning');
+  let almDef = null;
+  if (almTxt) {
+    const ha = _horarioDeCelda(almTxt);
+    if (!ha || ha.dur < GAP_CORTE) return toast('⚠️ Hora de almuerzo inválida (ej: 13:00 a 14:00, mínimo 30 min).', 'warning');
+    almDef = { a: _mm(ha.h1, ha.n1), b: _mm(ha.h2, ha.n2) };
+  }
   if (!file) return toast('⚠️ Selecciona el archivo Excel.', 'warning');
   if (typeof XLSX === 'undefined') return toast('❌ No se cargó la librería de Excel. Recarga la página (Ctrl+F5).', 'error');
 
@@ -3553,8 +3677,7 @@ async function previsualizarImportacion() {
     aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
   } catch (e) { box.innerHTML = ''; return toast('❌ No se pudo leer el archivo: ' + e.message, 'error'); }
 
-  // Detectar fila de encabezados y columnas
-  let hi = aoa.findIndex(r => r.some(c => normTxt(c) === 'fecha'));
+  const hi = aoa.findIndex(r => r.some(c => normTxt(c) === 'fecha'));
   if (hi < 0) { box.innerHTML = ''; return toast('❌ No encontré la columna "Fecha" en el archivo.', 'error', 6000); }
   const col = { fecha: -1, horario: -1, asig: -1, cap: -1, mod: -1 };
   aoa[hi].forEach((h, i) => {
@@ -3572,9 +3695,8 @@ async function previsualizarImportacion() {
   const cursoId = slugCurso(curso);
   const existentes = new Set();
   const exSnap = await db.collection('liveClasses').where('cursoId', '==', cursoId).get();
-  exSnap.docs.forEach(d => { const c = d.data(); existentes.add(`${c.scheduledAt?.toMillis?.()}|${normTxt(c.title)}`); });
+  exSnap.docs.forEach(d => { const c = d.data(); existentes.add(c.scheduledAt?.toMillis?.()); });
 
-  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
   const rows = [];
   for (let i = hi + 1; i < aoa.length; i++) {
     const r = aoa[i];
@@ -3583,6 +3705,7 @@ async function previsualizarImportacion() {
     const f = _fechaDeCelda(r[col.fecha]);
     const h = _horarioDeCelda(r[col.horario]);
     const asig = String(r[col.asig] || '').trim();
+    const esBreak = RE_BREAK.test(normTxt(asig));
     const cap = String(r[col.cap] || '').trim().replace(/\s+/g, ' ');
     const codMod = (col.mod >= 0 ? String(r[col.mod] || '').trim() : '') || codModDef;
     let start = null;
@@ -3590,48 +3713,40 @@ async function previsualizarImportacion() {
     if (!h) errores.push('Horario inválido (use 09:15 a 17:30)');
     else if (h.dur <= 0) errores.push('La hora de término es anterior al inicio');
     else if (h.dur > 720) errores.push('Duración mayor a 12 horas');
-    if (asig.length < 3) errores.push('Falta la asignatura');
+    if (!esBreak && asig.length < 3) errores.push('Falta la asignatura');
     if (f && h) {
       start = new Date(f.y, f.m - 1, f.d, h.h1, h.n1);
       if (isNaN(start) || start.getMonth() !== f.m - 1) { errores.push('Fecha inexistente'); start = null; }
-      else if (start < hoy) avisos.push('Fecha pasada');
     }
-    if (linea === 1 && !codMod) errores.push('Falta código de módulo SIC');
-    if (!cap) avisos.push('Sin capacitador');
-    const row = { fila, f, h, start, asig, cap, codMod, errores, avisos, dup: false };
-    if (start && h && h.dur > 0 && existentes.has(`${start.getTime()}|${normTxt(asig)}`)) row.dup = true;
-    rows.push(row);
+    if (!esBreak && linea === 1 && !codMod) errores.push('Falta código de módulo SIC');
+    if (!esBreak && !cap) avisos.push('Sin capacitador');
+    rows.push({ fila, f, h, start, asig, cap, codMod, errores, avisos, esBreak,
+      day: f ? _ymd(f) : '', a: h ? _mm(h.h1, h.n1) : 0, b: h ? _mm(h.h2, h.n2) : 0 });
   }
-  // Traslapes dentro del archivo
-  const ok = rows.filter(r => r.start && r.h && r.h.dur > 0);
-  ok.forEach(a => ok.forEach(b => {
-    if (a !== b && a.start < new Date(b.start.getTime() + b.h.dur * 60000) && b.start < new Date(a.start.getTime() + a.h.dur * 60000)) {
-      if (!a.avisos.includes('Traslape de horario')) a.avisos.push('Traslape de horario');
-    }
-  }));
+  const bloques = construirBloques(rows, almDef);
+  bloques.forEach(b => { b.dup = existentes.has(b.start.getTime()); });
 
-  // Mapa capacitador → profesor registrado
   const mapa = {};
-  [...new Set(rows.map(r => r.cap).filter(Boolean))].forEach(n => { mapa[n] = matchProfesor(n, profs)?.uid || ''; });
-  _imp = { rows, profs, mapa, curso, cursoId, linea, codSence, codigoCurso, videoType, videoUrl };
+  [...new Set(bloques.flatMap(b => b.segs.map(p => p.cap)).filter(Boolean))].forEach(n => { mapa[n] = matchProfesor(n, profs)?.uid || ''; });
+  _imp = { rows, bloques, profs, mapa, curso, cursoId, linea, codSence, codigoCurso, videoType, videoUrl };
   renderPreviewImportacion();
 }
 
 function renderPreviewImportacion() {
-  const { rows, profs, mapa } = _imp;
+  const { rows, bloques, profs, mapa } = _imp;
   const box = document.getElementById('im_preview');
-  const importables = rows.filter(r => !r.errores.length && !r.dup);
-  const nErr = rows.filter(r => r.errores.length).length;
-  const nDup = rows.filter(r => r.dup).length;
-  const horas = Math.round(importables.reduce((s, r) => s + r.h.dur, 0) / 6) / 10;
-
+  const nuevos = bloques.filter(b => !b.dup);
+  const filasError = rows.filter(r => r.errores.length);
+  const nDup = bloques.filter(b => b.dup).length;
+  const horas = Math.round(nuevos.reduce((s, b) => s + b.net, 0) / 6) / 10;
   const caps = Object.keys(mapa);
+
   const mapaHtml = caps.length ? `
     <div class="card">
       <div class="card-header"><h3>3️⃣ Capacitadores → profesores registrados</h3></div>
-      <p style="font-size:13px;color:var(--text-mid);margin-bottom:10px">Cada clase queda asignada al profesor elegido; ese profesor la verá en "Mis Clases". Si falta alguno, regístralo en <a onclick="navigate('profesores')" style="cursor:pointer;text-decoration:underline">Profesores</a> y vuelve a previsualizar.</p>
+      <p style="font-size:13px;color:var(--text-mid);margin-bottom:10px">Cada tramo queda asignado al profesor elegido; ese profesor verá el bloque en "Mis Clases". Si falta alguno, regístralo en <a onclick="navigate('profesores')" style="cursor:pointer;text-decoration:underline">Profesores</a> y vuelve a previsualizar.</p>
       <div class="table-wrap"><table><thead><tr><th>Nombre en el Excel</th><th>Profesor en la plataforma</th></tr></thead><tbody>
-        ${caps.map((n, i) => `<tr><td>${escHtml(n)}</td><td>
+        ${caps.map(n => `<tr><td>${escHtml(n)}</td><td>
           <select onchange="_imp.mapa[${JSON.stringify(n).replace(/"/g, '&quot;')}] = this.value; renderPreviewImportacion()">
             <option value="">— sin asignar (solo texto) —</option>
             ${profs.map(p => `<option value="${p.uid}" ${mapa[n] === p.uid ? 'selected' : ''}>${escHtml(p.name)} (${escHtml(p.rut)})</option>`).join('')}
@@ -3640,59 +3755,68 @@ function renderPreviewImportacion() {
       </tbody></table></div>
     </div>` : '';
 
+  const fechaTxt = b => `${_p2(b.start.getDate())}-${_p2(b.start.getMonth() + 1)}-${b.start.getFullYear()}`;
   box.innerHTML = `
     <div class="card">
       <div class="card-header"><h3>🔍 Previsualización — ${escHtml(_imp.curso)}</h3></div>
       <div style="font-size:13.5px;margin-bottom:12px">
-        <strong>${rows.length}</strong> filas leídas ·
-        <span style="color:var(--success)"><strong>${importables.length}</strong> se crearán (${horas} h)</span> ·
-        <span style="color:var(--danger)"><strong>${nErr}</strong> con error</span> ·
-        <span style="color:var(--text-light)"><strong>${nDup}</strong> ya existen</span>
+        <strong>${rows.length}</strong> filas leídas →
+        <span style="color:var(--success)"><strong>${nuevos.length}</strong> bloques SENCE se crearán (${horas} h de clases)</span> ·
+        <span style="color:var(--danger)"><strong>${filasError.length}</strong> filas con error</span> ·
+        <span style="color:var(--text-light)"><strong>${nDup}</strong> bloques ya existen</span>
       </div>
+      <p style="font-size:12.5px;color:var(--text-mid);margin-bottom:10px">Cada <strong>bloque</strong> es una sesión SENCE del alumno (mañana o tarde): el alumno inicia y cierra una vez por bloque. Dentro del bloque, cada asignatura es un tramo con su profesor.</p>
       <div class="table-wrap"><table>
-        <thead><tr><th>Fila</th><th>Fecha</th><th>Horario</th><th>Min</th><th>Asignatura</th><th>Capacitador</th><th>Estado</th></tr></thead>
-        <tbody>${rows.map(r => {
-          const est = r.errores.length ? `<span class="badge badge-red">❌ ${escHtml(r.errores.join('; '))}</span>`
-            : r.dup ? '<span class="badge badge-gray">🔁 Ya existe</span>'
-            : `<span class="badge badge-green">✅ OK</span>${r.avisos.map(a => ` <span class="badge badge-orange">⚠️ ${escHtml(a)}</span>`).join('')}`;
-          return `<tr><td>${r.fila}</td>
-            <td>${r.f ? String(r.f.d).padStart(2, '0') + '-' + String(r.f.m).padStart(2, '0') + '-' + r.f.y : '—'}</td>
-            <td>${r.h ? String(r.h.h1).padStart(2, '0') + ':' + String(r.h.n1).padStart(2, '0') + ' a ' + String(r.h.h2).padStart(2, '0') + ':' + String(r.h.n2).padStart(2, '0') : '—'}</td>
-            <td>${r.h && r.h.dur > 0 ? r.h.dur : '—'}</td><td>${escHtml(r.asig)}</td><td>${escHtml(r.cap || '—')}</td><td>${est}</td></tr>`;
-        }).join('')}</tbody></table></div>
+        <thead><tr><th>Fecha</th><th>Bloque</th><th>Horario</th><th>Tramos (asignatura · profesor)</th><th>Estado</th></tr></thead>
+        <tbody>${bloques.map(b => `<tr>
+          <td>${fechaTxt(b)}</td><td><strong>${escHtml(b.franja)}</strong></td>
+          <td style="font-family:'DM Mono';white-space:nowrap">${_hhmm(b.a)} – ${_hhmm(b.b)}<br><small>${b.dur} min</small></td>
+          <td style="font-size:12.5px">${b.segs.map(p => `<div>${_hhmm(p.a)}–${_hhmm(p.b)} · ${escHtml(p.asig)} · <em>${escHtml(p.cap || 'sin capacitador')}</em></div>`).join('')}</td>
+          <td>${b.dup ? '<span class="badge badge-gray">🔁 Ya existe</span>' : '<span class="badge badge-green">✅ OK</span>'}
+            ${b.avisos.map(a => `<div><span class="badge badge-orange">⚠️ ${escHtml(a)}</span></div>`).join('')}</td></tr>`).join('')}
+        </tbody></table></div>
     </div>
+    ${filasError.length ? `<div class="card" style="border-color:var(--danger)">
+      <div class="card-header"><h3>❌ Filas con error (se omiten)</h3></div>
+      <div class="table-wrap"><table><thead><tr><th>Fila</th><th>Asignatura</th><th>Problema</th></tr></thead><tbody>
+        ${filasError.map(r => `<tr><td>${r.fila}</td><td>${escHtml(r.asig)}</td><td>${escHtml(r.errores.join('; '))}</td></tr>`).join('')}
+      </tbody></table></div></div>` : ''}
     ${mapaHtml}
     <div class="card">
-      <button class="btn btn-success" id="btnImportar" ${importables.length ? '' : 'disabled'} onclick="ejecutarImportacion()">✅ Crear ${importables.length} clases</button>
-      <span style="font-size:12.5px;color:var(--text-light);margin-left:10px">Las filas con error o ya existentes se omiten. Las clases quedan "Programadas".</span>
+      <button class="btn btn-success" id="btnImportar" ${nuevos.length ? '' : 'disabled'} onclick="ejecutarImportacion()">✅ Crear ${nuevos.length} bloques</button>
+      <span style="font-size:12.5px;color:var(--text-light);margin-left:10px">Los bloques ya existentes y las filas con error se omiten. Los bloques quedan "Programados".</span>
     </div>`;
 }
 
 async function ejecutarImportacion() {
-  const { rows, profs, mapa, curso, cursoId, linea, codSence, codigoCurso, videoType, videoUrl } = _imp;
-  const lista = rows.filter(r => !r.errores.length && !r.dup);
+  const { bloques, profs, mapa, curso, cursoId, linea, codSence, codigoCurso, videoType, videoUrl } = _imp;
+  const lista = bloques.filter(b => !b.dup);
   if (!lista.length) return;
-  if (!confirm(`¿Crear ${lista.length} clases del curso "${curso}"?`)) return;
+  if (!confirm(`¿Crear ${lista.length} bloques del curso "${curso}"?`)) return;
   const btn = document.getElementById('btnImportar'); btn.disabled = true; btn.textContent = 'Creando...';
   const lote = 'imp-' + Date.now();
-  const p2 = n => String(n).padStart(2, '0');
   try {
     for (let i = 0; i < lista.length; i += 400) {
       const batch = db.batch();
-      lista.slice(i, i + 400).forEach(r => {
-        const prof = profs.find(p => p.uid === mapa[r.cap]);
-        const room = `inasep-${cursoId}-${r.start.getFullYear()}${p2(r.start.getMonth()+1)}${p2(r.start.getDate())}-${p2(r.h.h1)}${p2(r.h.n1)}`.slice(0, 80);
+      lista.slice(i, i + 400).forEach(b => {
+        const segmentos = b.segs.map(p => {
+          const prof = profs.find(x => x.uid === mapa[p.cap]);
+          return { titulo: p.asig, ini: _hhmm(p.a), fin: _hhmm(p.b), durMin: p.b - p.a, profesorUid: prof?.uid || '', profesorNombre: prof?.name || p.cap || '', codModulo: p.codMod || '' };
+        });
+        const uids = [...new Set(segmentos.map(s => s.profesorUid).filter(Boolean))];
+        const nombres = [...new Set(segmentos.map(s => s.profesorNombre).filter(Boolean))];
+        const room = `inasep-${cursoId}-${b.start.getFullYear()}${_p2(b.start.getMonth() + 1)}${_p2(b.start.getDate())}-${_p2(Math.floor(b.a / 60))}${_p2(b.a % 60)}`.slice(0, 80);
         batch.set(db.collection('liveClasses').doc(), {
-          title: r.asig, courseName: curso, cursoId,
-          description: r.cap ? 'Capacitador: ' + r.cap : '',
-          scheduledAt: firebase.firestore.Timestamp.fromDate(r.start),
-          duration: r.h.dur,
-          codSence: linea === 1 ? '' : codSence, codigoCurso, codigoModulo: r.codMod || '', lineaCapacitacion: linea,
+          title: b.title, courseName: curso, cursoId,
+          description: segmentos.map(s => `${s.ini}-${s.fin} ${s.titulo}${s.profesorNombre ? ' (' + s.profesorNombre + ')' : ''}`).join(' | ').slice(0, 900),
+          scheduledAt: firebase.firestore.Timestamp.fromDate(b.start),
+          duration: b.dur, duracionNeta: b.net, segmentos,
+          codSence: linea === 1 ? '' : codSence, codigoCurso, codigoModulo: segmentos[0]?.codModulo || '', lineaCapacitacion: linea,
           status: 'scheduled', videoType,
           videoUrl: videoType === 'jitsi' ? `https://meet.jit.si/${room}` : videoUrl,
           jitsiRoom: videoType === 'jitsi' ? room : '',
           capacidadEstimada: 0,
-          profesorUid: prof?.uid || '', profesorNombre: prof?.name || r.cap || '',
+          profesoresUids: uids, profesorUid: uids[0] || '', profesorNombre: nombres.join(', '),
           importLote: lote,
           createdAt: firebase.firestore.FieldValue.serverTimestamp(),
           updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -3701,12 +3825,105 @@ async function ejecutarImportacion() {
       });
       await batch.commit();
     }
-    toast(`✅ ${lista.length} clases creadas. Ahora matricula a los alumnos del curso.`, 'success', 7000);
+    toast(`✅ ${lista.length} bloques creados. Ahora matricula a los alumnos del curso.`, 'success', 7000);
     navigate('matriculas');
   } catch (e) {
     btn.disabled = false; btn.textContent = 'Reintentar';
     toast('❌ Error al crear: ' + e.message, 'error', 8000);
   }
+}
+
+/* Tramos del bloque (agenda) — usado en sala del alumno y del profesor */
+function htmlTramos(cls) {
+  const sg = cls.segmentos;
+  if (!sg || !sg.length || !cls.scheduledAt) return '';
+  const base = cls.scheduledAt.toDate();
+  const now = new Date();
+  const toD = t => { const [h, m] = String(t).split(':').map(Number); return new Date(base.getFullYear(), base.getMonth(), base.getDate(), h, m); };
+  return `<div class="card"><div class="card-header"><h3>🗓️ Tramos de este bloque</h3></div>
+    <div class="table-wrap"><table><thead><tr><th>Horario</th><th>Asignatura</th><th>Profesor</th></tr></thead><tbody>
+    ${sg.map(s => { const act = now >= toD(s.ini) && now < toD(s.fin); return `<tr style="${act ? 'background:var(--green-50);font-weight:600' : ''}">
+      <td style="font-family:'DM Mono'">${escHtml(s.ini)}–${escHtml(s.fin)}</td>
+      <td>${escHtml(s.titulo)} ${act ? '<span class="badge badge-live">ahora</span>' : ''}</td><td>${escHtml(s.profesorNombre || '—')}</td></tr>`; }).join('')}
+    </tbody></table></div></div>`;
+}
+
+/* ════════════════════════════════════════════════
+   BLOQUE: iniciar / cerrar (Worker fija la hora oficial)
+════════════════════════════════════════════════ */
+async function bloqueAccion(accion, classId) {
+  const res = await workerFetch('/api/bloque/' + accion, { method: 'POST', body: JSON.stringify({ classId }) });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || ('Error del servidor (' + res.status + ')'));
+  return j;
+}
+
+/* Alumno: escucha el estado del bloque (1 documento) */
+let _claseListener = null, _avisoCierreTimer = null, _avisoClassId = '';
+function escucharEstadoClase(classId, estadoInicial, attId) {
+  if (_claseListener) { _claseListener(); _claseListener = null; }
+  let prev = estadoInicial;
+  _claseListener = db.collection('liveClasses').doc(classId).onSnapshot(doc => {
+    if (!doc.exists) return;
+    const st = doc.data().status;
+    if (st === prev) return;
+    const antes = prev; prev = st;
+    if (st === 'active') {
+      toast('🔴 El profesor inició el bloque. Ya puedes registrar tu sesión SENCE.', 'success', 9000);
+      if (currentView === 'class-room') navigate('class-room', { id: classId });
+    } else if (st === 'finished' && antes === 'active') {
+      if (attId) { _avisoClassId = classId; mostrarAvisoCierre(attId); }
+      else if (currentView === 'class-room') navigate('class-room', { id: classId });
+    }
+  }, e => console.warn('estado clase', e.message));
+}
+function mostrarAvisoCierre(attId) {
+  if (_avisoCierreTimer) clearInterval(_avisoCierreTimer);
+  let n = 20;
+  document.getElementById('modalContainer').innerHTML = `
+    <div class="modal-overlay"><div class="modal" role="alertdialog" aria-live="assertive" aria-label="El profesor cerró el bloque">
+      <h3>🔔 El profesor cerró el bloque</h3>
+      <p style="margin:10px 0">Debes <strong>cerrar tu sesión SENCE</strong> para registrar tu salida.</p>
+      <p style="font-size:15px">Te llevaremos a SENCE en <strong id="avisoCd">${n}</strong> segundos…</p>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="cancelarAvisoCierre()">Cancelar</button>
+        <button class="btn btn-sence" onclick="cerrarSesionDesdeAviso('${attId}')">🇨🇱 Cerrar sesión SENCE ahora</button>
+      </div></div></div>`;
+  try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (e) {}
+  _avisoCierreTimer = setInterval(() => {
+    n--; const el = document.getElementById('avisoCd'); if (el) el.textContent = n;
+    if (n <= 0) cerrarSesionDesdeAviso(attId);
+  }, 1000);
+}
+function cancelarAvisoCierre() {
+  if (_avisoCierreTimer) { clearInterval(_avisoCierreTimer); _avisoCierreTimer = null; }
+  closeModal();
+  if (_avisoClassId && currentView === 'class-room') navigate('class-room', { id: _avisoClassId });
+}
+function cerrarSesionDesdeAviso(attId) {
+  if (_avisoCierreTimer) { clearInterval(_avisoCierreTimer); _avisoCierreTimer = null; }
+  closeModal();
+  cerrarSesionSence(attId, true);
+}
+
+/* Profesor: iniciar / cerrar el bloque */
+async function iniciarBloqueProfesor(classId) {
+  const btn = document.getElementById('btnIniciarBloque'); if (btn) btn.disabled = true;
+  try {
+    const j = await bloqueAccion('iniciar', classId);
+    toast(j.yaActivo ? '✅ El bloque ya estaba en curso: retomas la clase.' : '✅ Bloque iniciado. Los alumnos ya pueden registrar su sesión SENCE.', 'success', 6000);
+    const card = document.getElementById('bloqueEstadoCard');
+    if (card) card.innerHTML = '<strong>🔴 Bloque en curso.</strong> Los alumnos pueden registrar su asistencia SENCE.';
+    if (card) card.style.borderColor = 'var(--success)';
+  } catch (e) { if (btn) btn.disabled = false; toast('❌ ' + e.message, 'error', 8000); }
+}
+async function cerrarBloqueProfesor(classId) {
+  if (!confirm('¿Cerrar el bloque?\n\nLos alumnos recibirán el aviso para cerrar su sesión SENCE. Úsalo al salir a almorzar o al terminar la jornada.\n\nSi solo hay cambio de profesor, usa "Salir de la sala": el bloque sigue abierto para el siguiente profesor.')) return;
+  try {
+    const j = await bloqueAccion('cerrar', classId);
+    toast(`⏹ Bloque cerrado.${j.sesionesSinCerrar ? ' ' + j.sesionesSinCerrar + ' alumno(s) deben cerrar su sesión SENCE.' : ''}`, 'success', 7000);
+    await salirseDeSala();
+  } catch (e) { toast('❌ ' + e.message, 'error', 8000); }
 }
 
 /* ════════════════════════════════════════════════
@@ -3850,6 +4067,33 @@ async function abrirInformeCurso() {
       <button class="btn btn-primary" onclick="generarInformeCurso('xlsx')">📥 Excel</button>
     </div>`);
 }
+/* Ventana OFICIAL del bloque = desde que el profesor lo inició hasta que lo cerró.
+   El tiempo válido del alumno es la intersección entre su sesión SENCE y esa ventana
+   (si el alumno marcó antes de que el profesor iniciara, cuenta desde el inicio oficial). */
+function ventanaClase(c) {
+  const ini = c.scheduledAt.toDate();
+  const fin = new Date(ini.getTime() + (c.duration || 0) * 60000);
+  const oficial = !!c.bloqueIniciadoAt;
+  return { w0: c.bloqueIniciadoAt?.toDate?.() || ini, w1: c.bloqueCerradoAt?.toDate?.() || fin, oficial };
+}
+function intervaloValido(a, c) {
+  const s = a.inicioSesion?.toDate?.(); if (!s) return null;
+  const { w0, w1, oficial } = ventanaClase(c);
+  let e = a.cierreSesion?.toDate?.();
+  const sinCierre = !e;
+  if (!e) { if (!oficial || !c.bloqueCerradoAt) return { s, e: null, sinCierre, min: null }; e = w1; }
+  if (!oficial) return { s, e, sinCierre, min: Math.min(Math.max(0, Math.round((e - s) / 60000)), c.duration || 1e9) };
+  const S = new Date(Math.max(s, w0)), E = new Date(Math.min(e, w1));
+  return { s: S, e: E, sinCierre, min: Math.max(0, Math.round((E - S) / 60000)) };
+}
+function minutosEnTramo(iv, c, sg) {
+  if (!iv || !iv.e) return 0;
+  const d = c.scheduledAt.toDate();
+  const tD = t => { const [h, m] = String(t).split(':').map(Number); return new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, m); };
+  const S = Math.max(iv.s, tD(sg.ini)), E = Math.min(iv.e, tD(sg.fin));
+  return Math.max(0, Math.round((E - S) / 60000));
+}
+
 async function generarInformeCurso(formato) {
   const cursoId = document.getElementById('inf_curso').value;
   toast('⏳ Generando informe...', 'info', 2500);
@@ -3871,25 +4115,29 @@ async function generarInformeCurso(formato) {
     regs.forEach(a => { if (!alumnos.has(a.userId)) alumnos.set(a.userId, { rut: a.runAlumno || '', nombre: a.userName || '' }); });
 
     const claseById = new Map(clases.map(c => [c.id, c]));
-    const minDe = a => {
-      const ini = a.inicioSesion?.toDate?.(), fin = a.cierreSesion?.toDate?.();
-      if (!ini || !fin) return null;
-      const cl = claseById.get(a.classId);
-      return Math.max(0, Math.min(Math.round((fin - ini) / 60000), cl?.duration || 1e9));
-    };
-    const totalProg = clases.reduce((s, c) => s + (c.duration || 0), 0);
+    const ivDe = a => { const c = claseById.get(a.classId); return c ? intervaloValido(a, c) : null; };
+    const totalProg = clases.reduce((s, c) => s + (c.segmentos?.length ? c.segmentos.reduce((x, g) => x + (g.durMin || 0), 0) : (c.duration || 0)), 0);
+    const asigCols = []; // asignaturas únicas en orden de aparición
+    clases.forEach(c => (c.segmentos?.length ? c.segmentos.map(g => g.titulo) : [c.title]).forEach(t => { if (!asigCols.includes(t)) asigCols.push(t); }));
+
     const filas = [...alumnos.entries()].map(([uid, al]) => {
       const mias = regs.filter(r => r.userId === uid);
-      let tot = 0, asist = 0;
+      let tot = 0, asist = 0, sinCierre = 0;
+      const porAsig = Object.fromEntries(asigCols.map(t => [t, 0]));
       const celdas = clases.map(c => {
         const rs = mias.filter(r => r.classId === c.id && r.inicioSesion);
         if (!rs.length) return 'Ausente';
-        const mins = rs.map(minDe);
-        if (mins.every(m => m === null)) return 'Sin cierre';
-        const m = Math.min(mins.reduce((s, x) => s + (x || 0), 0), c.duration || 1e9);
+        const ivs = rs.map(r => intervaloValido(r, c));
+        sinCierre += ivs.filter(x => x && x.sinCierre).length;
+        if (ivs.every(x => !x || x.min === null)) return 'Sin cierre';
+        const tope = c.segmentos?.length ? c.segmentos.reduce((x, g) => x + (g.durMin || 0), 0) : (c.duration || 1e9);
+        let m = Math.min(ivs.reduce((s, x) => s + (x && x.min || 0), 0), tope);
+        // minutos por asignatura (tramo)
+        if (c.segmentos?.length) { m = 0; c.segmentos.forEach(g => { const mm = ivs.reduce((s, x) => s + minutosEnTramo(x, c, g), 0); porAsig[g.titulo] += mm; m += mm; }); }
+        else porAsig[c.title] += m;
         tot += m; asist++; return m;
       });
-      return { ...al, asist, tot, pct: totalProg ? Math.round(tot / totalProg * 1000) / 10 : 0, celdas };
+      return { ...al, asist, tot, sinCierre, pct: totalProg ? Math.round(tot / totalProg * 1000) / 10 : 0, celdas, porAsig };
     }).sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
 
     const cab = clases[0], nombreCurso = cab.courseName || cursoId;
@@ -3899,29 +4147,38 @@ async function generarInformeCurso(formato) {
     if (formato === 'xlsx') {
       const resumen = [
         ['Informe de asistencia — ' + nombreCurso], ['Línea', cab.lineaCapacitacion, 'CodSence', cab.codSence || '', 'CodigoCurso', cab.codigoCurso || ''],
-        ['Generado', new Date().toLocaleString('es-CL'), 'Horas programadas', hh(totalProg)], [],
-        ['Alumno', 'RUT', 'Clases asistidas', 'Horas asistidas', '% asistencia', ...clases.map(fmtC)]
+        ['Generado', new Date().toLocaleString('es-CL'), 'Horas programadas', hh(totalProg)],
+        ['Horas válidas = tiempo de la sesión SENCE del alumno dentro de la ventana oficial del bloque (inicio/cierre del profesor).'], [],
+        ['Alumno', 'RUT', 'Bloques asistidos', 'Horas asistidas', '% asistencia', 'Sesiones sin cierre SENCE', ...clases.map(fmtC)]
       ];
-      filas.forEach(f => resumen.push([f.nombre, f.rut, `${f.asist}/${clases.length}`, hh(f.tot), f.pct, ...f.celdas]));
-      const detalle = [['RUT', 'Alumno', 'Clase', 'Fecha clase', 'Inicio SENCE', 'Cierre SENCE', 'Minutos', 'ID sesión SENCE', 'Estado']];
-      regs.sort((a, b) => (a.runAlumno || '').localeCompare(b.runAlumno || '')).forEach(a => detalle.push([
-        a.runAlumno || '', a.userName || '', a.classTitle || '', claseById.get(a.classId) ? fmtDate(claseById.get(a.classId).scheduledAt) : '',
-        a.inicioSesion ? fmtDateTime(a.inicioSesion) : '', a.cierreSesion ? fmtDateTime(a.cierreSesion) : '', minDe(a) ?? '', a.idSesionSence || '', a.estadoSesion || '']));
+      filas.forEach(f => resumen.push([f.nombre, f.rut, `${f.asist}/${clases.length}`, hh(f.tot), f.pct, f.sinCierre, ...f.celdas]));
+      const porAsigSheet = [['Alumno', 'RUT', ...asigCols, 'Total horas']];
+      filas.forEach(f => porAsigSheet.push([f.nombre, f.rut, ...asigCols.map(t => hh(f.porAsig[t])), hh(f.tot)]));
+      const detalle = [['RUT', 'Alumno', 'Bloque', 'Fecha', 'Inicio SENCE', 'Cierre SENCE', 'Minutos válidos', 'Cierre SENCE pendiente', 'Bloque inició (profesor)', 'Bloque cerró (profesor)', 'ID sesión SENCE', 'Estado']];
+      regs.sort((a, b) => (a.runAlumno || '').localeCompare(b.runAlumno || '')).forEach(a => {
+        const c = claseById.get(a.classId); const iv = ivDe(a);
+        detalle.push([a.runAlumno || '', a.userName || '', a.classTitle || '', c ? fmtDate(c.scheduledAt) : '',
+          a.inicioSesion ? fmtDateTime(a.inicioSesion) : '', a.cierreSesion ? fmtDateTime(a.cierreSesion) : '', iv?.min ?? '',
+          a.inicioSesion && !a.cierreSesion ? 'Sí' : 'No', c?.bloqueIniciadoAt ? fmtDateTime(c.bloqueIniciadoAt) : '', c?.bloqueCerradoAt ? fmtDateTime(c.bloqueCerradoAt) : '',
+          a.idSesionSence || '', a.estadoSesion || '']);
+      });
       const wb = XLSX.utils.book_new();
-      const w1 = XLSX.utils.aoa_to_sheet(resumen); w1['!cols'] = [{ wch: 34 }, { wch: 13 }, { wch: 15 }, { wch: 15 }, { wch: 13 }, ...clases.map(() => ({ wch: 26 }))];
+      const w1 = XLSX.utils.aoa_to_sheet(resumen); w1['!cols'] = [{ wch: 34 }, { wch: 13 }, { wch: 16 }, { wch: 15 }, { wch: 13 }, { wch: 22 }, ...clases.map(() => ({ wch: 28 }))];
       XLSX.utils.book_append_sheet(wb, w1, 'Resumen');
-      const w2 = XLSX.utils.aoa_to_sheet(detalle); w2['!cols'] = [{ wch: 13 }, { wch: 32 }, { wch: 40 }, { wch: 12 }, { wch: 18 }, { wch: 18 }, { wch: 9 }, { wch: 40 }, { wch: 12 }];
+      const w3 = XLSX.utils.aoa_to_sheet(porAsigSheet); w3['!cols'] = [{ wch: 34 }, { wch: 13 }, ...asigCols.map(() => ({ wch: 24 })), { wch: 12 }];
+      XLSX.utils.book_append_sheet(wb, w3, 'Horas por asignatura');
+      const w2 = XLSX.utils.aoa_to_sheet(detalle); w2['!cols'] = [{ wch: 13 }, { wch: 32 }, { wch: 44 }, { wch: 12 }, { wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 40 }, { wch: 12 }];
       XLSX.utils.book_append_sheet(wb, w2, 'Detalle');
       XLSX.writeFile(wb, `asistencia_${cursoId}_${new Date().toISOString().slice(0, 10)}.xlsx`);
     } else {
       const { jsPDF } = window.jspdf; const doc = new jsPDF();
       let y = 18;
       const head = () => { doc.setFontSize(13); doc.text('Informe de asistencia — ' + nombreCurso.slice(0, 60), 14, 14); doc.setFontSize(9);
-        doc.text(`Generado ${new Date().toLocaleString('es-CL')} · Horas programadas: ${hh(totalProg)} · Clases: ${clases.length}`, 14, 20);
-        doc.setFont(undefined, 'bold'); doc.text('Alumno', 14, 28); doc.text('RUT', 100, 28); doc.text('Clases', 135, 28); doc.text('Horas', 158, 28); doc.text('%', 182, 28); doc.setFont(undefined, 'normal'); y = 34; };
+        doc.text(`Generado ${new Date().toLocaleString('es-CL')} · Horas programadas: ${hh(totalProg)} · Bloques: ${clases.length}`, 14, 20);
+        doc.setFont(undefined, 'bold'); doc.text('Alumno', 14, 28); doc.text('RUT', 95, 28); doc.text('Bloques', 128, 28); doc.text('Horas', 152, 28); doc.text('%', 172, 28); doc.text('Sin cierre', 183, 28); doc.setFont(undefined, 'normal'); y = 34; };
       head();
       filas.forEach(f => { if (y > 280) { doc.addPage(); head(); }
-        doc.text(String(f.nombre).slice(0, 48), 14, y); doc.text(String(f.rut), 100, y); doc.text(`${f.asist}/${clases.length}`, 135, y); doc.text(String(hh(f.tot)), 158, y); doc.text(f.pct + '%', 182, y); y += 6; });
+        doc.text(String(f.nombre).slice(0, 46), 14, y); doc.text(String(f.rut), 95, y); doc.text(`${f.asist}/${clases.length}`, 128, y); doc.text(String(hh(f.tot)), 152, y); doc.text(f.pct + '%', 172, y); doc.text(String(f.sinCierre), 188, y); y += 6; });
       doc.save(`asistencia_${cursoId}_${new Date().toISOString().slice(0, 10)}.pdf`);
     }
     closeModal(); toast('✅ Informe generado.', 'success');
@@ -3935,11 +4192,11 @@ function bannerSesionesLargas(docs) {
   const ahora = Date.now();
   const largas = docs.filter(d => {
     const a = d.data(); const ini = a.inicioSesion?.toMillis?.(); const ls = a.lastSeen?.toMillis?.();
-    return a.estadoSesion === 'abierta' && ((ini && ahora - ini > 9 * 3600e3) || (ls && ahora - ls > 30 * 60e3));
+    return a.estadoSesion === 'abierta' && (a.bloqueCerrado === true || (ini && ahora - ini > 9 * 3600e3) || (ls && ahora - ls > 30 * 60e3));
   });
   if (!largas.length) return '';
   return `<div class="card" style="border:2px solid var(--warning);background:#fff8ee">
-    <strong>⚠️ ${largas.length} sesión(es) SENCE abierta(s) por demasiado tiempo o sin actividad</strong>
+    <strong>⚠️ ${largas.length} sesión(es) SENCE sin cerrar (bloque terminado, mucho tiempo abierta o sin actividad)</strong>
     <div style="font-size:13px;margin:6px 0">${largas.slice(0, 6).map(d => escHtml(d.data().userName || d.data().runAlumno || '')).join(', ')}${largas.length > 6 ? '…' : ''}</div>
     <button class="btn btn-sm btn-warning" onclick="navigate('attendance')">Revisar y cerrar</button></div>`;
 }
@@ -4030,8 +4287,8 @@ async function renderTeacherRoom(mc, params={}) {
   const doc = await db.collection('liveClasses').doc(classId).get();
   if (!doc.exists) { mc.innerHTML='<div class="empty-state"><div class="icon">❌</div><p>Clase no encontrada.</p></div>'; return; }
   const cls = doc.data();
-  if (cls.profesorUid && cls.profesorUid !== currentUser.uid) {
-    mc.innerHTML='<div class="empty-state"><div class="icon">🔒</div><p>Esta clase está asignada a otro profesor.</p></div>'; return;
+  if (!puedeVerClase(cls)) {
+    mc.innerHTML='<div class="empty-state"><div class="icon">🔒</div><p>Este bloque está asignado a otro profesor.</p></div>'; return;
   }
 
   const teacherName = currentUser.displayName || currentUser.email.split('@')[0];
@@ -4061,6 +4318,18 @@ async function renderTeacherRoom(mc, params={}) {
       </div>
       ${cls.status==='active' ? '<span class="badge badge-live">🔴 EN VIVO</span>' : ''}
     </div>
+
+    <!-- ESTADO DEL BLOQUE -->
+    <div class="card" id="bloqueEstadoCard" style="margin-bottom:16px;border:2px solid ${cls.status==='active'?'var(--success)':'var(--warning)'}">
+      ${cls.status === 'active'
+        ? `<strong>🔴 Bloque en curso</strong>${cls.bloqueIniciadoAt ? ' desde las ' + cls.bloqueIniciadoAt.toDate().toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'}) : ''}. Los alumnos pueden registrar su asistencia SENCE.`
+        : cls.status === 'finished'
+        ? `<strong>⏹ Bloque cerrado</strong>${cls.bloqueCerradoAt ? ' a las ' + cls.bloqueCerradoAt.toDate().toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'}) : ''}. Solo un administrador puede reabrirlo.`
+        : `<strong>⏳ El bloque aún no inicia.</strong> Los alumnos no pueden registrarse en SENCE hasta que lo inicies.
+           <div style="margin-top:10px"><button class="btn btn-success" id="btnIniciarBloque" onclick="iniciarBloqueProfesor('${classId}')">▶️ Iniciar bloque</button></div>`}
+    </div>
+
+    ${htmlTramos(cls)}
 
     <!-- CRONÓMETRO DOCENCIA -->
     <div class="session-timer" id="teacherTimerBox">
@@ -4116,9 +4385,15 @@ async function renderTeacherRoom(mc, params={}) {
       <div id="libroClaseEstado" style="margin-top:10px"></div>
     </div>
 
-    <!-- BOTÓN SALIR -->
-    <div style="margin-bottom:24px">
-      <button class="btn btn-danger" onclick="salirseDeSala()">🚪 Salir de la Sala (registra salida)</button>
+    <!-- SALIR / CERRAR BLOQUE -->
+    <div class="card" style="margin-bottom:24px">
+      <p style="font-size:12.5px;color:var(--text-mid);margin-bottom:10px">
+        <strong>Relevo de profesor:</strong> usa "Salir de la sala"; el bloque sigue abierto y el siguiente profesor lo retoma en la misma sala.<br>
+        <strong>Almuerzo o fin de jornada:</strong> usa "Cerrar bloque"; los alumnos recibirán el aviso para cerrar su sesión SENCE.</p>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn btn-secondary" onclick="salirseDeSala()">🚪 Salir de la sala (relevo)</button>
+        ${cls.status === 'active' ? `<button class="btn btn-danger" onclick="cerrarBloqueProfesor('${classId}')">⏹ Cerrar bloque (almuerzo / fin de jornada)</button>` : ''}
+      </div>
     </div>`;
 
   initClassChat(classId);
@@ -4128,7 +4403,8 @@ async function renderTeacherRoom(mc, params={}) {
   await registrarEntradaProfesor(classId, cls, teacherName);
 
   // 2. Marcar clase como con profesor activo
-  await db.collection('liveClasses').doc(classId).update({
+  _teacherClassId = classId;
+  if (cls.status !== 'finished') await db.collection('liveClasses').doc(classId).update({
     teacherActive: true,
     teacherUid: currentUser.uid,
     teacherName: teacherName,
@@ -4197,11 +4473,11 @@ async function salirseDeSala() {
   // Marcar clase sin profesor activo (solo si sigue siendo el mismo)
   // (No actualizamos status para no afectar el flujo de alumnos)
   try {
-    const classSnap = await db.collection('liveClasses').where('teacherUid','==',currentUser.uid).get();
-    for (const d of classSnap.docs) {
-      await d.ref.update({ teacherActive: false, teacherLeftAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    if (_teacherClassId) {
+      await db.collection('liveClasses').doc(_teacherClassId).update({ teacherActive: false, teacherLeftAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
     }
-  } catch(e) { /* silencioso */ }
+  } catch(e) { /* silencioso (p. ej. el bloque ya fue cerrado por el servidor) */ }
+  _teacherClassId = null;
 
   toast('🚪 Salida registrada.', 'info');
   navigate('live-classes');
