@@ -1476,7 +1476,7 @@ async function renderNewClass(mc, params={}) {
         <div class="form-group">
           <label>Nombre de la sala Jitsi</label>
           <input type="text" id="fc_jitsiRoom" value="${escHtml(data?.jitsiRoom||'')}" placeholder="INASEP-Clase-001">
-          <small>Sala en el servidor propio de INASEP (meet.inasep.cl). Entran con token: el profesor como moderador.</small>
+          <small>Solo el NOMBRE de la sala, sin espacios ni tildes ni la dirección (ej: curso-formacion-ggss-23-nov). El sistema autoriza la entrada: el profesor como moderador.</small>
         </div>
       </div>
       <div class="form-group">
@@ -1560,7 +1560,11 @@ async function saveClass(id) {
   const capacidadEstimada = parseInt(document.getElementById('fc_capacidad')?.value) || 0;
 
   // Jitsi propio: no se guarda ninguna URL de la sala (solo jitsiRoom; la entrada la autoriza el Worker).
-  if (videoType === 'jitsi') videoUrl = '';
+  if (videoType === 'jitsi') {
+    videoUrl = '';
+    const eSala = errorNombreSala(jitsiRoom);
+    if (eSala) { const el = document.getElementById('fc_jitsiRoom'); if (el) { el.focus(); el.value = el.value.trim() && !/^[A-Za-z0-9._-]{3,100}$/.test(jitsiRoom) ? sugerirNombreSala(jitsiRoom) : el.value; } return toast('⚠️ ' + eSala + ' Ya lo corregí en el campo: revísalo y vuelve a guardar.', 'warning', 9000); }
+  }
   else if (videoUrl && urlEsJitsiPropia(videoUrl)) return toast('⚠️ Las salas de meet.inasep.cl se configuran con el tipo "Jitsi" (entrada autorizada por el sistema), no con una URL.', 'warning', 6000);
 
   if (!title || title.length < 3)     return toast('⚠️ El título debe tener al menos 3 caracteres.','warning');
@@ -3364,6 +3368,17 @@ async function cargarListaProfesores() {
    v4 — UTILIDADES DE CURSO / MATRÍCULA / PROFESOR
 ════════════════════════════════════════════════ */
 const JITSI_DOMAIN = 'meet.inasep.cl';
+/* Nombre de sala Jitsi válido (misma regla que el Worker): 3–100 caracteres, solo letras, números, punto, guion y guion bajo.
+   Devuelve '' si es válido; si no, el mensaje con un nombre sugerido. */
+function sugerirNombreSala(txt) {
+  const sug = slugCurso(String(txt || '').replace(/^https?:\/\/[^/]*\//i, '').replace(/^meet\.inasep\.cl\//i, '')) || 'sala-clase';
+  return sug.length < 3 ? 'sala-' + sug : sug;
+}
+function errorNombreSala(room) {
+  if (/^[A-Za-z0-9._-]{3,100}$/.test(room)) return '';
+  if (!room) return 'Indica el nombre de la sala Jitsi (ej: ' + 'sala-clase-1' + ').';
+  return `El nombre de la sala solo puede tener letras, números, guiones y puntos (sin espacios, tildes, "/" ni ":"), entre 3 y 100 caracteres. Sugerencia: ${sugerirNombreSala(room)}`;
+}
 /* ¿Esta URL apunta al servidor Jitsi propio? Esas salas SOLO se abren por el Worker (montarVideoJitsi); nunca por iframe ni enlace. */
 function urlEsJitsiPropia(u) {
   try { const h = new URL(String(u)).hostname.toLowerCase(); return h === JITSI_DOMAIN || h.endsWith('.' + JITSI_DOMAIN) || h === 'guest.' + JITSI_DOMAIN; }
@@ -3392,6 +3407,7 @@ async function montarVideoJitsi(hostId, classId, cls) {
   try {
     const res = await workerFetch('/api/jitsi/token', { method: 'POST', body: JSON.stringify({ classId }) });
     const j = await res.json().catch(() => ({}));
+    if (j.code === 'SIN_SALA_JITSI') return msg('🔒', 'La sala de esta clase no está bien configurada (nombre inválido o vacío). Un administrador debe corregirla en Clases en Vivo → Editar.');
     if (!res.ok) return msg(res.status === 409 ? '⏳' : '🔒', j.error || 'No se pudo abrir la sala.');
     await cargarJitsiApi(j.domain);
     if (!document.getElementById(hostId)) return;
