@@ -344,6 +344,13 @@ tr:hover td { background:#f9fcfa; }
 iframe.video-frame { width:100%; height:100%; min-height:500px; border:none; }
 .jitsi-host { width:100%; height:100%; min-height:500px; display:flex; align-items:center; justify-content:center; }
 .jitsi-host iframe { width:100%; height:100%; min-height:500px; border:none; }
+/* Pantalla completa de la sala (celulares): horizontal. Se usa la API de pantalla completa + bloqueo de orientación;
+   si el equipo no las permite (iPhone), la sala ocupa toda la pantalla y se rota 90° por CSS. */
+.video-room.sala-pc { position:fixed !important; top:0; left:0; width:100vw !important; height:100vh !important; height:100dvh !important; max-width:none !important; z-index:9999; background:#000; margin:0; border-radius:0; }
+.video-room.sala-pc.rotada { top:0; left:100vw; width:100vh !important; height:100vw !important; transform-origin:top left; transform:rotate(90deg); }
+.video-room.sala-pc .jitsi-host, .video-room.sala-pc .jitsi-host iframe { min-height:0; height:100%; }
+.sala-pc-salir { display:none; position:absolute; top:8px; left:8px; z-index:10000; background:rgba(0,0,0,.65); color:#fff; border:1px solid rgba(255,255,255,.5); border-radius:8px; padding:8px 12px; font-size:14px; cursor:pointer; }
+.video-room.sala-pc .sala-pc-salir { display:block; }
 
 /* Cronómetro de sesión */
 .session-timer {
@@ -1069,6 +1076,7 @@ function updateSidebar() {
     { label: '📋 Registro SENCE',  view: 'sence-log'    },
     { label: '📤 Envío SIC',       view: 'sence-sic'    },
     { label: '⚙️ Config. SENCE',   view: 'sence-config' },
+    { label: '🖥️ Servidor Jitsi',  view: 'jitsi-servidor' },
   ] : isTeacher ? [
     { label: '📹 Mis Clases',      view: 'live-classes' },
     { label: '📖 Libro de Clases', view: 'libro-clases' },
@@ -1127,6 +1135,7 @@ function renderMain(view, params={}) {
     'attendance':         renderAttendance,
     'sence-log':          renderSenceLog,
     'sence-config':       renderSenceConfig,
+    'jitsi-servidor':     renderJitsiServidor,
     'sence-sic':          renderSenceSIC,
     'alumnos':            renderAlumnos,
     'profesores':         renderProfesores,
@@ -1476,7 +1485,7 @@ async function renderNewClass(mc, params={}) {
         <div class="form-group">
           <label>Nombre de la sala Jitsi</label>
           <input type="text" id="fc_jitsiRoom" value="${escHtml(data?.jitsiRoom||'')}" placeholder="INASEP-Clase-001">
-          <small>Sala en el servidor propio de INASEP (meet.inasep.cl). Entran con token: el profesor como moderador.</small>
+          <small>Solo el NOMBRE de la sala, sin espacios ni tildes ni la dirección (ej: curso-formacion-ggss-23-nov). El sistema autoriza la entrada: el profesor como moderador.</small>
         </div>
       </div>
       <div class="form-group">
@@ -1560,7 +1569,11 @@ async function saveClass(id) {
   const capacidadEstimada = parseInt(document.getElementById('fc_capacidad')?.value) || 0;
 
   // Jitsi propio: no se guarda ninguna URL de la sala (solo jitsiRoom; la entrada la autoriza el Worker).
-  if (videoType === 'jitsi') videoUrl = '';
+  if (videoType === 'jitsi') {
+    videoUrl = '';
+    const eSala = errorNombreSala(jitsiRoom);
+    if (eSala) { const el = document.getElementById('fc_jitsiRoom'); if (el) { el.focus(); el.value = el.value.trim() && !/^[A-Za-z0-9._-]{3,100}$/.test(jitsiRoom) ? sugerirNombreSala(jitsiRoom) : el.value; } return toast('⚠️ ' + eSala + ' Ya lo corregí en el campo: revísalo y vuelve a guardar.', 'warning', 9000); }
+  }
   else if (videoUrl && urlEsJitsiPropia(videoUrl)) return toast('⚠️ Las salas de meet.inasep.cl se configuran con el tipo "Jitsi" (entrada autorizada por el sistema), no con una URL.', 'warning', 6000);
 
   if (!title || title.length < 3)     return toast('⚠️ El título debe tener al menos 3 caracteres.','warning');
@@ -1766,7 +1779,7 @@ async function renderClassRoom(mc, params={}) {
       <div class="video-room" id="videoRoom">
         ${videoEmbed}
       </div>
-      ${_esJitsi ? `<div style="padding:10px 14px;border-top:1px solid var(--border,#e5e7eb);font-size:12.5px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button class="btn btn-sm btn-secondary" onclick="reingresarSala('${classId}')">🔄 Reingresar a la sala</button><span style="color:var(--text-mid)">Si te desconectaste o la sala no carga, reingresa aquí. Se revisa el estado del bloque.</span></div>` : ''}
+      ${_esJitsi ? `<div style="padding:10px 14px;border-top:1px solid var(--border,#e5e7eb);font-size:12.5px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button class="btn btn-sm btn-secondary" onclick="reingresarSala('${classId}')">🔄 Reingresar a la sala</button><button class="btn btn-sm btn-secondary" onclick="pantallaCompletaSala()">⛶ Pantalla completa horizontal</button><span style="color:var(--text-mid)">Si te desconectaste o la sala no carga, reingresa aquí. Se revisa el estado del bloque.</span></div>` : ''}
     </div>
 
     ${cls.videoType !== 'jitsi' && cls.videoUrl && !urlEsJitsiPropia(cls.videoUrl) ? `
@@ -2225,6 +2238,422 @@ async function renderSenceLog(mc) {
 /* ════════════════════════════════════════════════
    VISTA: CONFIG SENCE ADMIN
 ════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════
+   SERVIDOR JITSI (solo admin): estado visto desde afuera + bitácora de problemas y soluciones
+   · El estado lo calcula el Worker (/api/jitsi/salud) y se guarda en jitsiMonitor/ultimo.
+   · La bitácora vive en jitsiIncidentes (solo admin). Los avisos del monitor se agregan solos.
+════════════════════════════════════════════════ */
+const JITSI_CATEGORIAS = ['Moderación', 'Acceso / tokens', 'Servidor', 'Portal', 'Worker', 'Red / certificados', 'Otro'];
+const JITSI_CONOCIDOS = [
+  { id: 'conocido-001', titulo: 'Candado: "La clase no usa una sala Jitsi propia"', categoria: 'Portal',
+    sintoma: 'Al entrar a la clase aparece un candado con ese mensaje y no abre la sala.',
+    causa: 'El nombre de la sala tenía espacios (ej. "CURSO FORMACION GGSS 23 NOV"). El Worker solo acepta letras, números, punto, guion y guion bajo (3 a 100 caracteres).',
+    solucion: 'Editar la clase y poner un nombre válido, por ejemplo curso-formacion-ggss-23-nov. El formulario ahora valida y sugiere el nombre al guardar.' },
+  { id: 'conocido-002', titulo: 'Todos los usuarios entraban como moderadores (con JWT)', categoria: 'Moderación',
+    sintoma: 'Los alumnos podían poner contraseña, expulsar y silenciar a todos, aunque su token no traía permisos de moderador.',
+    causa: 'Jicofo tenía enable-auto-owner = true (da dueño al primero y al siguiente en la fila) y authentication enabled = true con type XMPP (configuración heredada del modo antiguo).',
+    solucion: 'En /etc/jitsi/jicofo/jicofo.conf: conference { enable-auto-owner = false } y authentication { enabled = false }. Reiniciar Jicofo fuera de horario de clases. Verificar con: sudo prosodyctl shell muc affiliations <sala>@conference.meet.inasep.cl (profesor owner, alumno member).' },
+  { id: 'conocido-003', titulo: 'Jicofo no arranca después de editar jicofo.conf', categoria: 'Servidor',
+    sintoma: 'Tras agregar un bloque al archivo, Jicofo no quedaría activo.',
+    causa: 'Al pegar el bloque se perdió la llave "}" final del archivo (HOCON inválido). Se detectó antes de reiniciar porque el archivo pesaba 2 bytes menos de lo esperado.',
+    solucion: 'Revisar siempre con sudo tail -8 /etc/jitsi/jicofo/jicofo.conf antes de reiniciar. Si ya falló: restaurar el respaldo (sudo cp -a jicofo.conf.respaldo-... jicofo.conf) y reiniciar Jicofo.' },
+  { id: 'conocido-004', titulo: 'Permission denied al leer /etc/jitsi o /etc/prosody', categoria: 'Servidor',
+    sintoma: 'Los comandos cat, ls o sed sobre esas carpetas responden "Permission denied".',
+    causa: 'Esas carpetas solo las puede leer root; faltaba sudo.',
+    solucion: 'Anteponer sudo al comando. También en sudo ls -la /etc/jitsi/jicofo/.' },
+  { id: 'conocido-005', titulo: 'Cualquiera sin token podía entrar a una sala abierta', categoria: 'Acceso / tokens',
+    sintoma: 'El dominio de invitados guest.meet.inasep.cl seguía activo con acceso anónimo.',
+    causa: 'token_verification y authentication = "token" solo protegen el dominio principal; el dominio anónimo seguía definido en Prosody y en el config.js.',
+    solucion: 'Comentar el VirtualHost "guest.meet.inasep.cl" en /etc/prosody/conf.avail/meet.inasep.cl.cfg.lua y anonymousdomain en /etc/jitsi/meet/meet.inasep.cl-config.js; reiniciar Prosody, Jicofo y Videobridge. Probar en incógnito: debe pedir autenticación.' },
+  { id: 'conocido-006', titulo: 'Entrando directo a meet.inasep.cl pide autenticación', categoria: 'Acceso / tokens',
+    sintoma: 'Una persona abre el enlace de la sala a mano y Jitsi le pide autenticación para crear la reunión.',
+    causa: 'Es el comportamiento esperado: el servidor exige el token que solo emite el Worker.',
+    solucion: 'No es un fallo. Las personas deben entrar desde el portal (Clases en Vivo). Si alguien con cuenta del portal ve esto, revisar con el botón "Reingresar a la sala" y confirmar que el bloque está iniciado.' },
+  { id: 'conocido-007', titulo: 'El alumno ve "El profesor aún no inicia el bloque"', categoria: 'Portal',
+    sintoma: 'El alumno no puede entrar a la sala ni registrar su asistencia SENCE.',
+    causa: 'Es una regla del sistema: el alumno solo entra y se registra cuando el profesor inicia el bloque.',
+    solucion: 'El profesor (o el admin) debe pulsar "Iniciar bloque". Si el bloque ya terminó, solo un administrador puede reabrirlo.' },
+  { id: 'conocido-008', titulo: 'Histórico: "Esperando al anfitrión…" (modo XMPP antiguo)', categoria: 'Servidor',
+    sintoma: 'Con el servidor en autenticación XMPP, el profesor veía "Esperando al anfitrión" al entrar a una sala vacía.',
+    causa: 'En ese modo la sala vacía exige iniciar sesión con una cuenta XMPP.',
+    solucion: 'Ya no aplica: con JWT el profesor entra directo como moderador. Se deja como referencia por si se vuelve al modo anterior.' },
+];
+const JITSI_GUIA_COMANDOS = `# Estado de los servicios
+sudo systemctl status prosody jicofo jitsi-videobridge2 nginx --no-pager | grep -E "●|Active"
+
+# Últimos mensajes de cada servicio
+sudo journalctl -u prosody -n 50 --no-pager
+sudo tail -50 /var/log/jitsi/jicofo.log
+sudo tail -50 /var/log/jitsi/jvb.log
+
+# Quién está en una sala y con qué rol (profesor owner, alumno member)
+sudo prosodyctl shell muc list conference.meet.inasep.cl
+sudo prosodyctl shell muc affiliations NOMBRE-SALA@conference.meet.inasep.cl
+sudo prosodyctl shell muc occupants NOMBRE-SALA@conference.meet.inasep.cl
+
+# Disco, memoria y carga
+df -h /
+free -h
+uptime
+
+# Vencimiento del certificado
+sudo openssl x509 -enddate -noout -in /etc/jitsi/meet/meet.inasep.cl.crt
+
+# Reiniciar (SOLO fuera de horario de clases: corta las conferencias activas)
+sudo systemctl restart prosody; sleep 3; sudo systemctl restart jicofo jitsi-videobridge2`;
+
+let _jitsiInc = [];
+function jitsiHace(d) {
+  if (!d) return '';
+  const min = Math.round((Date.now() - d.getTime()) / 60000);
+  if (min < 1) return 'hace un momento';
+  if (min < 60) return `hace ${min} min`;
+  if (min < 1440) return `hace ${Math.round(min / 60)} h`;
+  return `hace ${Math.round(min / 1440)} día(s)`;
+}
+
+function renderJitsiServidor(mc) {
+  if (currentRole !== 'admin') { mc.innerHTML = '<div class="empty-state"><div class="icon">🔒</div><p>Solo el administrador puede ver esta sección.</p></div>'; return; }
+  mc.innerHTML = `
+    <div class="page-header">
+      <div><h2>🖥️ Servidor Jitsi</h2><div class="breadcrumb">Estado de la videoconferencia y bitácora de problemas</div></div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3>Estado del servidor</h3>
+        <button class="btn btn-primary btn-sm" id="btnSaludJitsi" onclick="jitsiRevisarAhora()">🔄 Revisar ahora</button></div>
+      <div id="saludJitsiBox"><div class="empty-state" style="padding:18px"><p style="font-size:13px">Cargando última revisión...</p></div></div>
+      <p style="font-size:12px;color:var(--text-light);margin-top:12px">
+        Esta revisión mira Jitsi <strong>desde internet</strong> (página, API, canales de conexión) y la configuración del sistema.
+        <strong>No mide disco, memoria ni servicios internos</strong>: para eso usa los comandos de la guía de abajo.</p>
+    </div>
+
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3>📊 Recursos del servidor</h3></div>
+      <div id="servidorJitsiBox"><div class="empty-state" style="padding:18px"><p style="font-size:13px">Cargando...</p></div></div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3>🧹 Limpieza del servidor</h3>
+        <div class="flex gap-2 flex-wrap">
+          <button class="btn btn-secondary btn-sm" id="btnLimpiarAhora" onclick="jitsiLimpiarAhora()">🧹 Limpiar ahora</button>
+          <button class="btn btn-primary btn-sm" onclick="jitsiGuardarLimpieza()">💾 Guardar configuración</button>
+        </div></div>
+      <div id="limpiezaJitsiBox"><div class="empty-state" style="padding:18px"><p style="font-size:13px">Cargando...</p></div></div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px">
+      <details>
+        <summary style="cursor:pointer;font-weight:700;color:var(--green-900)">🔌 Instalar o desinstalar el agente del servidor (una sola vez)</summary>
+        <div style="font-size:12.5px;color:var(--text-mid);margin:10px 0;line-height:1.6">
+          El agente es un programa pequeño que se instala en el servidor Jitsi. Cada minuto <strong>envía</strong> su estado a este portal y
+          <strong>lee</strong> la configuración de limpieza que dejaste arriba. <strong>No abre puertos</strong> y no recibe órdenes libres:
+          solo puede hacer la limpieza fija descrita arriba. Las instrucciones paso a paso vienen en el archivo <code>INSTALAR_AGENTE_JITSI.md</code>.
+          <br>Comandos que usarás después de instalarlo: <code>sudo inasep-jitsi-agente --probar</code> (muestra lo que leería, sin enviar nada) y
+          <code>sudo inasep-jitsi-agente --limpiar-prueba</code> (muestra qué borraría, sin borrar).
+        </div>
+      </details>
+    </div>
+
+    <div class="card" style="margin-bottom:20px">
+      <details>
+        <summary style="cursor:pointer;font-weight:700;color:var(--green-900)">🧰 Guía rápida de comandos de diagnóstico (se ejecutan en el servidor por SSH)</summary>
+        <p style="font-size:12.5px;color:var(--text-mid);margin:10px 0">Todos llevan <code>sudo</code>. No pegues contraseñas ni el <code>app_secret</code> en ningún chat. Antes de cambiar un archivo, haz una copia con <code>sudo cp -a archivo archivo.respaldo-FECHA</code>.</p>
+        <pre style="white-space:pre-wrap;user-select:text;background:#f6f8f7;border:1px solid #dde5e1;border-radius:8px;padding:12px;font-size:12px;overflow-x:auto">${escHtml(JITSI_GUIA_COMANDOS)}</pre>
+      </details>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><h3>📒 Bitácora de problemas y soluciones</h3>
+        <div class="flex gap-2 flex-wrap">
+          <button class="btn btn-secondary btn-sm" onclick="jitsiCargarConocidos()">📚 Cargar problemas conocidos</button>
+          <button class="btn btn-success btn-sm" onclick="jitsiAbrirIncidente('')">➕ Registrar problema</button>
+        </div></div>
+      <div class="flex gap-2 flex-wrap" style="margin-bottom:12px">
+        <select id="bjEstado" onchange="pintarBitacoraJitsi()" style="max-width:190px">
+          <option value="">Todos los estados</option><option value="abierto">Abiertos</option><option value="resuelto">Resueltos</option></select>
+        <input type="text" id="bjBuscar" placeholder="Buscar en título, síntoma, causa o solución..." oninput="pintarBitacoraJitsi()" style="flex:1;min-width:200px">
+      </div>
+      <div id="bitacoraJitsiBox"><div class="empty-state" style="padding:18px"><p style="font-size:13px">Cargando bitácora...</p></div></div>
+    </div>`;
+  jitsiCargarUltimaSalud();
+  jitsiCargarServidor();
+  jitsiCargarLimpieza();
+  cargarBitacoraJitsi();
+}
+
+/* ── Estado ── */
+function pintarSaludJitsi(estado, resumen, revisiones, fecha) {
+  const box = document.getElementById('saludJitsiBox'); if (!box) return;
+  const ico = { ok: '🟢', atencion: '🟡', critico: '🔴' };
+  const badge = { ok: 'badge-green', atencion: 'badge-orange', critico: 'badge-red' };
+  const txt = { ok: 'Todo en orden', atencion: 'Requiere atención', critico: 'Problema crítico' };
+  const filas = (revisiones || []).map(x => `
+    <tr>
+      <td style="white-space:nowrap">${ico[x.nivel] || '⚪'}</td>
+      <td><strong>${escHtml(x.nombre)}</strong><div style="font-size:11.5px;color:var(--text-light)">${x.tipo === 'config' ? 'Configuración del sistema' : 'Visto desde internet'}</div></td>
+      <td>${escHtml(x.detalle)}${x.nivel !== 'ok' && x.ayuda ? `<div style="font-size:12px;color:var(--text-mid);margin-top:4px">👉 ${escHtml(x.ayuda)}</div>` : ''}</td>
+    </tr>`).join('');
+  box.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <span class="badge ${badge[estado] || 'badge-gray'}" style="font-size:13px;padding:6px 12px">${ico[estado] || '⚪'} ${escHtml(txt[estado] || resumen || '—')}</span>
+      <span style="font-size:12.5px;color:var(--text-mid)">${escHtml(resumen || '')}</span>
+      <span style="font-size:12px;color:var(--text-light)">Última revisión: ${fecha ? escHtml(fecha.toLocaleString('es-CL')) + ' · ' + jitsiHace(fecha) : '—'}</span>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th></th><th>Revisión</th><th>Resultado</th></tr></thead><tbody>${filas}</tbody></table></div>`;
+}
+async function jitsiCargarUltimaSalud() {
+  const box = document.getElementById('saludJitsiBox'); if (!box) return;
+  try {
+    const d = await db.collection('jitsiMonitor').doc('ultimo').get();
+    if (!d.exists) { box.innerHTML = '<div class="empty-state" style="padding:18px"><p style="font-size:13px">Todavía no hay revisiones. Pulsa "Revisar ahora".</p></div>'; return; }
+    const x = d.data(); let rev = [];
+    try { rev = JSON.parse(x.checksJson || '[]'); } catch (e) { rev = []; }
+    pintarSaludJitsi(x.estado, x.resumen, rev, x.at?.toDate ? x.at.toDate() : null);
+  } catch (e) { box.innerHTML = `<p style="color:var(--danger);font-size:13px">No se pudo leer la última revisión: ${escHtml(e.message)}</p>`; }
+}
+async function jitsiRevisarAhora() {
+  const btn = document.getElementById('btnSaludJitsi'); if (btn) { btn.disabled = true; btn.textContent = 'Revisando...'; }
+  try {
+    const res = await workerFetch('/api/jitsi/salud', { method: 'POST' });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || ('Error ' + res.status));
+    pintarSaludJitsi(j.estado, j.resumen, j.revisiones, new Date(j.at));
+    if (j.registrado === false) toast('⚠️ Se revisó, pero no se pudo guardar el resultado en la bitácora.', 'warning', 6000);
+    cargarBitacoraJitsi(); jitsiCargarServidor();
+  } catch (e) { toast('❌ ' + e.message, 'error', 7000); }
+  finally { const b = document.getElementById('btnSaludJitsi'); if (b) { b.disabled = false; b.textContent = '🔄 Revisar ahora'; } }
+}
+
+/* ── Recursos del servidor (los envía el agente instalado en el servidor) ── */
+function _barraJitsi(pct, aviso, critico) {
+  if (pct === null || pct === undefined) return '<span style="color:var(--text-light)">sin dato</span>';
+  const col = pct >= critico ? '#c0392b' : pct >= aviso ? '#e67e22' : '#2e8b57';
+  return `<div style="display:flex;align-items:center;gap:8px"><div style="flex:1;min-width:90px;height:9px;background:#e8eeeb;border-radius:6px;overflow:hidden"><div style="width:${Math.min(100, Math.max(0, pct))}%;height:100%;background:${col}"></div></div><strong>${escHtml(String(pct))}%</strong></div>`;
+}
+function pintarServidorJitsi(x) {
+  const box = document.getElementById('servidorJitsiBox'); if (!box) return;
+  if (!x) { box.innerHTML = '<div class="empty-state" style="padding:18px"><p style="font-size:13px">El agente todavía no está instalado en el servidor. Sigue la guía <strong>INSTALAR_AGENTE_JITSI.md</strong>; cuando empiece a reportar, aquí verás disco, memoria, servicios y certificado.</p></div>'; return; }
+  const at = x.at?.toDate ? x.at.toDate() : null;
+  const viejo = !at || (Date.now() - at.getTime()) > 10 * 60000;
+  let d = {}, pr = [];
+  try { d = JSON.parse(x.datosJson || '{}'); } catch (e) { d = {}; }
+  try { pr = JSON.parse(x.problemasJson || '[]'); } catch (e) { pr = []; }
+  const ico = { ok: '🟢', atencion: '🟡', critico: '🔴' };
+  const estado = viejo ? 'critico' : (x.estado || 'ok');
+  const serv = ['prosody', 'jicofo', 'jitsi-videobridge2', 'nginx'].map(n => {
+    const e = d.servicios && d.servicios[n];
+    return `<span class="badge ${e === 'active' ? 'badge-green' : e ? 'badge-red' : 'badge-gray'}" style="margin:2px">${e === 'active' ? '✔' : e ? '✖' : '?'} ${escHtml(n)}</span>`;
+  }).join('');
+  const cert = d.certDias === null || d.certDias === undefined ? 'sin dato' : `${d.certDias} día(s)`;
+  const confs = d.conferencias === null || d.conferencias === undefined ? 'sin dato' : String(d.conferencias);
+  box.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <span class="badge ${estado === 'ok' ? 'badge-green' : estado === 'atencion' ? 'badge-orange' : 'badge-red'}" style="font-size:13px;padding:6px 12px">${ico[estado]} ${viejo ? 'El servidor no está reportando' : estado === 'ok' ? 'Recursos en orden' : estado === 'atencion' ? 'Requiere atención' : 'Problema crítico'}</span>
+      <span style="font-size:12px;color:var(--text-light)">Último reporte: ${at ? escHtml(at.toLocaleString('es-CL')) + ' · ' + jitsiHace(at) : '—'}${d.host ? ' · ' + escHtml(d.host) : ''}</span>
+    </div>
+    ${viejo ? '<p style="font-size:12.5px;color:var(--danger);margin:0 0 10px">👉 Hace más de 10 minutos que no llegan datos. Revisa en el servidor: <code>sudo systemctl status inasep-jitsi-agente.timer</code></p>' : ''}
+    <div class="table-wrap"><table><tbody>
+      <tr><td style="width:170px"><strong>Disco</strong></td><td>${_barraJitsi(d.discoPct, 80, 90)}<div style="font-size:11.5px;color:var(--text-light)">${d.discoLibreGB != null ? escHtml(String(d.discoLibreGB)) + ' GB libres de ' + escHtml(String(d.discoTotalGB ?? '?')) + ' GB' : ''}</div></td></tr>
+      <tr><td><strong>Memoria RAM</strong></td><td>${_barraJitsi(d.ramPct, 90, 95)}<div style="font-size:11.5px;color:var(--text-light)">${d.ramTotalMB != null ? 'de ' + escHtml(String(Math.round(d.ramTotalMB / 1024 * 10) / 10)) + ' GB' : ''}</div></td></tr>
+      <tr><td><strong>Carga (1 min)</strong></td><td>${d.carga1 != null ? escHtml(String(d.carga1)) + ' con ' + escHtml(String(d.cpus ?? '?')) + ' CPU' : 'sin dato'}</td></tr>
+      <tr><td><strong>Servicios</strong></td><td>${serv}</td></tr>
+      <tr><td><strong>Salas activas</strong></td><td>${escHtml(confs)}</td></tr>
+      <tr><td><strong>Certificado vence en</strong></td><td>${escHtml(cert)}</td></tr>
+    </tbody></table></div>
+    ${pr.length ? `<div style="margin-top:12px">${pr.map(q => `<div style="font-size:12.5px;margin-bottom:6px">${q.nivel === 'critico' ? '🔴' : '🟡'} <strong>${escHtml(q.nombre)}</strong>: ${escHtml(q.detalle)}${q.ayuda ? `<div style="color:var(--text-mid)">👉 ${escHtml(q.ayuda)}</div>` : ''}</div>`).join('')}</div>` : ''}`;
+}
+async function jitsiCargarServidor() {
+  const box = document.getElementById('servidorJitsiBox'); if (!box) return;
+  try { const d = await db.collection('jitsiMonitor').doc('servidor').get(); pintarServidorJitsi(d.exists ? d.data() : null); }
+  catch (e) { box.innerHTML = `<p style="color:var(--danger);font-size:13px">No se pudo leer el estado del servidor: ${escHtml(e.message)}</p>`; }
+}
+
+/* ── Limpieza controlada desde el portal ── */
+let _jitsiLimp = null;
+async function jitsiCargarLimpieza() {
+  const box = document.getElementById('limpiezaJitsiBox'); if (!box) return;
+  try {
+    const [c, h] = await Promise.all([
+      db.collection('jitsiMonitor').doc('config').get(),
+      db.collection('jitsiLimpiezas').orderBy('at', 'desc').limit(15).get(),
+    ]);
+    const cfg = Object.assign({ limpiezaActiva: false, limpiezaHora: 4, diasLogs: 14, limpiarLogs: true, limpiarJournal: true, limpiarTmp: true, limpiarApt: true, limpiarAhora: false }, c.exists ? c.data() : {});
+    _jitsiLimp = cfg;
+    const horas = Array.from({ length: 24 }, (_, i) => `<option value="${i}" ${Number(cfg.limpiezaHora) === i ? 'selected' : ''}>${String(i).padStart(2, '0')}:00</option>`).join('');
+    const chk = (id, v, t) => `<label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:6px 0"><input type="checkbox" id="${id}" ${v ? 'checked' : ''}> ${t}</label>`;
+    const filas = h.docs.map(x => {
+      const o = x.data(); const at = o.at?.toDate ? o.at.toDate() : null; let det = [];
+      try { det = JSON.parse(o.detalleJson || '[]'); } catch (e) { det = []; }
+      const est = o.omitida ? `<span class="badge badge-orange">Omitida</span>` : o.ok === false ? `<span class="badge badge-red">Con errores</span>` : `<span class="badge badge-green">Correcta</span>`;
+      return `<tr><td style="white-space:nowrap">${at ? escHtml(at.toLocaleString('es-CL')) : '—'}</td><td>${o.motivo === 'manual' ? 'Manual' : 'Programada'}</td><td>${est}</td>
+        <td>${o.omitida ? escHtml(o.omitida) : o.ok === false ? escHtml(o.error || '') : 'Liberó ' + escHtml(String(o.liberadoMB ?? 0)) + ' MB'}${det.length ? `<div style="font-size:11.5px;color:var(--text-light)">${det.map(escHtml).join(' · ')}</div>` : ''}</td></tr>`;
+    }).join('');
+    box.innerHTML = `
+      <p style="font-size:12.5px;color:var(--text-mid);margin:0 0 12px">La limpieza <strong>nunca se hace si hay salas activas</strong> y nunca toca configuraciones, cuentas, claves ni respaldos.
+        Solo borra: registros viejos ya rotados, volcados de memoria de Java en /tmp y la caché de instalación (apt).</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-bottom:14px">
+        <div>
+          <label style="display:flex;gap:8px;align-items:center;font-weight:700;margin-bottom:10px"><input type="checkbox" id="lj_activa" ${cfg.limpiezaActiva === true ? 'checked' : ''}> Limpieza automática diaria</label>
+          <label style="font-size:13px">Hora (hora de Chile)</label>
+          <select id="lj_hora" style="max-width:150px;margin-bottom:10px">${horas}</select>
+          <label style="font-size:13px">Borrar registros con más de (días)</label>
+          <input type="number" id="lj_dias" min="7" max="90" value="${escHtml(String(cfg.diasLogs))}" style="max-width:110px">
+        </div>
+        <div>
+          <div style="font-size:13px;font-weight:700;margin-bottom:4px">Qué limpiar</div>
+          ${chk('lj_logs', cfg.limpiarLogs, 'Registros rotados de Jitsi, Prosody y Nginx')}
+          ${chk('lj_journal', cfg.limpiarJournal, 'Registro del sistema (journal)')}
+          ${chk('lj_tmp', cfg.limpiarTmp, 'Volcados de memoria de Java en /tmp')}
+          ${chk('lj_apt', cfg.limpiarApt, 'Caché de instalación (apt)')}
+        </div>
+      </div>
+      <p style="font-size:12px;color:var(--text-light);margin:0 0 6px">${cfg.updatedBy ? 'Última modificación: ' + escHtml(cfg.updatedBy) + (cfg.updatedAt?.toDate ? ' · ' + escHtml(cfg.updatedAt.toDate().toLocaleString('es-CL')) : '') : 'Aún no has guardado una configuración: la limpieza está apagada.'}</p>
+      ${cfg.limpiarAhora === true ? '<p style="font-size:13px;background:#fff6e5;border:1px solid #f0d9a8;border-radius:8px;padding:8px 12px">⏳ Hay una limpieza pedida; el servidor la hará en 1 o 2 minutos. <button class="btn btn-sm btn-secondary" onclick="jitsiCancelarLimpieza()">Cancelar</button></p>' : ''}
+      <div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Estado</th><th>Resultado</th></tr></thead>
+        <tbody>${filas || '<tr><td colspan="4" style="color:var(--text-light)">Todavía no hay limpiezas registradas.</td></tr>'}</tbody></table></div>`;
+  } catch (e) { box.innerHTML = `<p style="color:var(--danger);font-size:13px">No se pudo leer la limpieza: ${escHtml(e.message)}</p>`; }
+}
+async function jitsiGuardarLimpieza() {
+  const g = (id) => document.getElementById(id);
+  if (!g('lj_hora')) return;
+  const dias = Number(g('lj_dias').value);
+  if (!Number.isInteger(dias) || dias < 7 || dias > 90) { toast('Los días deben ser un número entre 7 y 90.', 'warning'); return; }
+  const body = { limpiezaActiva: g('lj_activa').checked, limpiezaHora: Number(g('lj_hora').value), diasLogs: dias,
+    limpiarLogs: g('lj_logs').checked, limpiarJournal: g('lj_journal').checked, limpiarTmp: g('lj_tmp').checked, limpiarApt: g('lj_apt').checked };
+  if (body.limpiezaActiva && !(body.limpiarLogs || body.limpiarJournal || body.limpiarTmp || body.limpiarApt)) { toast('Marca al menos una cosa para limpiar.', 'warning'); return; }
+  try {
+    const res = await workerFetch('/api/jitsi/config-limpieza', { method: 'POST', body: JSON.stringify(body) });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || ('Error ' + res.status));
+    toast(body.limpiezaActiva ? `✅ Guardado. Se limpiará todos los días a las ${String(body.limpiezaHora).padStart(2, '0')}:00 (hora de Chile).` : '✅ Guardado. La limpieza automática está apagada.', 'success', 6000);
+    jitsiCargarLimpieza();
+  } catch (e) { toast('❌ ' + e.message, 'error', 7000); }
+}
+async function jitsiLimpiarAhora() {
+  if (!confirm('¿Pedir una limpieza ahora?\n\nEl servidor la hará en 1 o 2 minutos, y solo si no hay salas activas. No toca configuraciones, cuentas ni respaldos.')) return;
+  const btn = document.getElementById('btnLimpiarAhora'); if (btn) btn.disabled = true;
+  try {
+    const res = await workerFetch('/api/jitsi/limpiar-ahora', { method: 'POST', body: '{}' });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || ('Error ' + res.status));
+    toast('✅ Pedido enviado. Actualiza en 2 minutos para ver el resultado.', 'success', 6000);
+    jitsiCargarLimpieza();
+  } catch (e) { toast('❌ ' + e.message, 'error', 8000); }
+  finally { const b = document.getElementById('btnLimpiarAhora'); if (b) b.disabled = false; }
+}
+async function jitsiCancelarLimpieza() {
+  try {
+    const res = await workerFetch('/api/jitsi/limpiar-ahora', { method: 'POST', body: JSON.stringify({ cancelar: true }) });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || ('Error ' + res.status));
+    toast('Pedido cancelado.', 'success'); jitsiCargarLimpieza();
+  } catch (e) { toast('❌ ' + e.message, 'error', 7000); }
+}
+
+/* ── Bitácora ── */
+async function cargarBitacoraJitsi() {
+  const box = document.getElementById('bitacoraJitsiBox'); if (!box) return;
+  try {
+    const s = await db.collection('jitsiIncidentes').orderBy('fecha', 'desc').limit(300).get();
+    _jitsiInc = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => /^[A-Za-z0-9_-]+$/.test(x.id));
+    pintarBitacoraJitsi();
+  } catch (e) { box.innerHTML = `<p style="color:var(--danger);font-size:13px">No se pudo leer la bitácora: ${escHtml(e.message)}</p>`; }
+}
+function pintarBitacoraJitsi() {
+  const box = document.getElementById('bitacoraJitsiBox'); if (!box) return;
+  const est = document.getElementById('bjEstado')?.value || '';
+  const q = normTxt(document.getElementById('bjBuscar')?.value || '');
+  const lista = _jitsiInc.filter(x => (!est || x.estado === est) &&
+    (!q || normTxt([x.titulo, x.sintoma, x.causa, x.solucion, x.categoria].join(' ')).includes(q)));
+  const abiertos = _jitsiInc.filter(x => x.estado === 'abierto').length;
+  if (!_jitsiInc.length) { box.innerHTML = '<div class="empty-state" style="padding:18px"><div class="icon">📒</div><p>La bitácora está vacía. Usa "Cargar problemas conocidos" para empezar con los que ya resolvimos.</p></div>'; return; }
+  const origen = { manual: 'Manual', conocido: 'Conocido', monitor: 'Monitor' };
+  box.innerHTML = `
+    <div style="font-size:12.5px;color:var(--text-light);margin-bottom:8px">${lista.length} de ${_jitsiInc.length} registro(s) · ${abiertos} abierto(s)</div>
+    <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Problema</th><th>Categoría</th><th>Origen</th><th>Estado</th></tr></thead><tbody>
+    ${lista.map(x => `
+      <tr style="cursor:pointer" onclick="jitsiAbrirIncidente('${escHtml(x.id)}')">
+        <td style="white-space:nowrap">${fmtDate(x.fecha)}</td>
+        <td><strong>${escHtml(x.titulo)}</strong></td>
+        <td>${escHtml(x.categoria || '—')}</td>
+        <td>${escHtml(origen[x.origen] || x.origen || '—')}</td>
+        <td>${x.estado === 'abierto' ? '<span class="badge badge-red">🔴 Abierto</span>' : '<span class="badge badge-green">✅ Resuelto</span>'}</td>
+      </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text-light);padding:18px">Ningún registro coincide con el filtro.</td></tr>'}
+    </tbody></table></div>`;
+}
+function jitsiAbrirIncidente(id) {
+  const x = id ? _jitsiInc.find(i => i.id === id) : null;
+  if (id && !x) return toast('No se encontró el registro.', 'warning');
+  const f = x?.fecha?.toDate ? x.fecha.toDate() : new Date();
+  const val = (v) => escHtml(v || '');
+  openModal(`
+    <h3>${x ? '📒 Registro de problema' : '➕ Registrar problema'}</h3>
+    <div class="form-group"><label>Qué pasó (título) *</label>
+      <input type="text" id="bj_titulo" maxlength="140" value="${val(x?.titulo)}" placeholder="Ej: Los alumnos no pueden entrar a la sala"></div>
+    <div class="form-row">
+      <div class="form-group"><label>Fecha</label><input type="date" id="bj_fecha" value="${toLocalInput(f).slice(0, 10)}"></div>
+      <div class="form-group"><label>Categoría</label><select id="bj_categoria">
+        ${JITSI_CATEGORIAS.map(c => `<option ${((x?.categoria) || 'Otro') === c ? 'selected' : ''}>${escHtml(c)}</option>`).join('')}</select></div>
+    </div>
+    <div class="form-group"><label>Qué se vio (síntoma)</label><textarea id="bj_sintoma" rows="3" maxlength="2000">${val(x?.sintoma)}</textarea></div>
+    <div class="form-group"><label>Por qué pasó (causa)</label><textarea id="bj_causa" rows="3" maxlength="2000">${val(x?.causa)}</textarea></div>
+    <div class="form-group"><label>Cómo se resolvió (solución, comandos usados)</label><textarea id="bj_solucion" rows="4" maxlength="3000">${val(x?.solucion)}</textarea>
+      <small>No escribas contraseñas ni el app_secret.</small></div>
+    <div class="form-group"><label>Estado</label><select id="bj_estado">
+      <option value="abierto" ${(x?.estado || 'abierto') === 'abierto' ? 'selected' : ''}>🔴 Abierto</option>
+      <option value="resuelto" ${x?.estado === 'resuelto' ? 'selected' : ''}>✅ Resuelto</option></select></div>
+    ${x ? `<div style="font-size:11.5px;color:var(--text-light);margin-bottom:8px">Origen: ${escHtml(x.origen || '—')}${x.creadoPorNombre ? ' · registrado por ' + escHtml(x.creadoPorNombre) : ''}${x.resueltoAt ? ' · resuelto ' + escHtml(fmtDateTime(x.resueltoAt)) : ''}</div>` : ''}
+    <div class="modal-actions">
+      ${x ? `<button class="btn btn-danger" style="margin-right:auto" onclick="jitsiEliminarIncidente('${escHtml(x.id)}')">🗑️ Eliminar</button>` : ''}
+      <button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+      <button class="btn btn-primary" onclick="jitsiGuardarIncidente('${x ? escHtml(x.id) : ''}')">💾 Guardar</button>
+    </div>`, true);
+}
+async function jitsiGuardarIncidente(id) {
+  const v = (k) => (document.getElementById(k)?.value || '').trim();
+  const titulo = v('bj_titulo'), estado = v('bj_estado'), solucion = v('bj_solucion');
+  if (titulo.length < 5) return toast('⚠️ Escribe un título de al menos 5 caracteres.', 'warning');
+  if (estado === 'resuelto' && !solucion) return toast('⚠️ Para marcarlo como resuelto, anota la solución.', 'warning');
+  const fechaTxt = v('bj_fecha') || toLocalInput(new Date()).slice(0, 10);
+  const prev = id ? _jitsiInc.find(i => i.id === id) : null;
+  const data = {
+    titulo, categoria: v('bj_categoria') || 'Otro', sintoma: v('bj_sintoma'), causa: v('bj_causa'), solucion, estado,
+    fecha: firebase.firestore.Timestamp.fromDate(new Date(fechaTxt + 'T12:00:00')),
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+  };
+  if (estado === 'resuelto' && prev?.estado !== 'resuelto') data.resueltoAt = firebase.firestore.FieldValue.serverTimestamp();
+  if (estado === 'abierto') data.resueltoAt = null;
+  try {
+    if (id) await db.collection('jitsiIncidentes').doc(id).update(data);
+    else await db.collection('jitsiIncidentes').add({ ...data, origen: 'manual', creadoPor: currentUser.uid, creadoPorNombre: currentUser.displayName || '' });
+    closeModal(); toast('✅ Registro guardado.', 'success'); cargarBitacoraJitsi();
+  } catch (e) { toast('❌ ' + e.message, 'error', 7000); }
+}
+async function jitsiEliminarIncidente(id) {
+  if (!confirm('¿Eliminar este registro de la bitácora? No se puede deshacer.')) return;
+  try { await db.collection('jitsiIncidentes').doc(id).delete(); closeModal(); toast('🗑️ Registro eliminado.', 'success'); cargarBitacoraJitsi(); }
+  catch (e) { toast('❌ ' + e.message, 'error', 7000); }
+}
+async function jitsiCargarConocidos() {
+  if (!confirm(`Se cargarán hasta ${JITSI_CONOCIDOS.length} problemas ya resueltos (21-11-2026). Los que ya estén cargados no se tocan ni se duplican. ¿Continuar?`)) return;
+  let nuevos = 0;
+  try {
+    for (const k of JITSI_CONOCIDOS) {
+      const ref = db.collection('jitsiIncidentes').doc(k.id);
+      if ((await ref.get()).exists) continue;
+      const { id, ...resto } = k;
+      await ref.set({ ...resto, estado: 'resuelto', origen: 'conocido', creadoPor: currentUser.uid, creadoPorNombre: currentUser.displayName || '',
+        fecha: firebase.firestore.Timestamp.fromDate(new Date('2026-11-21T12:00:00')),
+        resueltoAt: firebase.firestore.Timestamp.fromDate(new Date('2026-11-21T12:00:00')),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+      nuevos++;
+    }
+    toast(nuevos ? `✅ Se cargaron ${nuevos} problema(s) conocido(s).` : 'ℹ️ Ya estaban todos cargados.', 'success', 5000);
+    cargarBitacoraJitsi();
+  } catch (e) { toast('❌ ' + e.message, 'error', 7000); }
+}
+
 function renderSenceConfig(mc) {
   mc.innerHTML = `
     <div class="page-header">
@@ -3364,6 +3793,17 @@ async function cargarListaProfesores() {
    v4 — UTILIDADES DE CURSO / MATRÍCULA / PROFESOR
 ════════════════════════════════════════════════ */
 const JITSI_DOMAIN = 'meet.inasep.cl';
+/* Nombre de sala Jitsi válido (misma regla que el Worker): 3–100 caracteres, solo letras, números, punto, guion y guion bajo.
+   Devuelve '' si es válido; si no, el mensaje con un nombre sugerido. */
+function sugerirNombreSala(txt) {
+  const sug = slugCurso(String(txt || '').replace(/^https?:\/\/[^/]*\//i, '').replace(/^meet\.inasep\.cl\//i, '')) || 'sala-clase';
+  return sug.length < 3 ? 'sala-' + sug : sug;
+}
+function errorNombreSala(room) {
+  if (/^[A-Za-z0-9._-]{3,100}$/.test(room)) return '';
+  if (!room) return 'Indica el nombre de la sala Jitsi (ej: ' + 'sala-clase-1' + ').';
+  return `El nombre de la sala solo puede tener letras, números, guiones y puntos (sin espacios, tildes, "/" ni ":"), entre 3 y 100 caracteres. Sugerencia: ${sugerirNombreSala(room)}`;
+}
 /* ¿Esta URL apunta al servidor Jitsi propio? Esas salas SOLO se abren por el Worker (montarVideoJitsi); nunca por iframe ni enlace. */
 function urlEsJitsiPropia(u) {
   try { const h = new URL(String(u)).hostname.toLowerCase(); return h === JITSI_DOMAIN || h.endsWith('.' + JITSI_DOMAIN) || h === 'guest.' + JITSI_DOMAIN; }
@@ -3382,77 +3822,73 @@ function cargarJitsiApi(domain) {
   });
   return _jitsiScript;
 }
-
-/* Entra a Jitsi únicamente con JWT emitido por el Worker.
-   Si falta el token o los datos de la sala, se bloquea el ingreso. */
+/* Entra a la sala Jitsi propia con un token emitido por el Worker:
+   profesor asignado / admin = moderador; alumno = participante solo con el bloque iniciado.
+   La sala SIEMPRE la entrega el Worker tras validar rol, asignación, matrícula y estado del bloque; el portal no arma
+   ninguna URL de sala por su cuenta (sin iframe directo). Si el Worker no responde bien, no se entra. */
 async function montarVideoJitsi(hostId, classId, cls) {
-  const host = document.getElementById(hostId);
-  if (!host) return;
-
-  const msg = (icono, txt) => {
-    if (_jitsiApi) {
-      try { _jitsiApi.dispose(); } catch (e) {}
-      _jitsiApi = null;
-    }
-    host.innerHTML = `<div class="video-placeholder"><div class="icon">${icono}</div><p>${escHtml(txt)}</p></div>`;
-  };
-
+  const host = document.getElementById(hostId); if (!host) return;
+  const msg = (icono, txt) => { if (_jitsiApi) { try { _jitsiApi.dispose(); } catch (e) {} _jitsiApi = null; } host.innerHTML = `<div class="video-placeholder"><div class="icon">${icono}</div><p>${escHtml(txt)}</p></div>`; };
   try {
-    const res = await workerFetch('/api/jitsi/token', {
-      method: 'POST',
-      body: JSON.stringify({ classId })
-    });
-
+    const res = await workerFetch('/api/jitsi/token', { method: 'POST', body: JSON.stringify({ classId }) });
     const j = await res.json().catch(() => ({}));
-
-    if (!res.ok) {
-      return msg(res.status === 409 ? '⏳' : '🔒',
-        j.error || 'No se pudo abrir la sala.');
-    }
-
-    // Seguridad: nunca permitir ingreso sin JWT.
-    if (
-      !j ||
-      typeof j.jwt !== 'string' ||
-      !j.jwt.trim() ||
-      typeof j.domain !== 'string' ||
-      !j.domain.trim() ||
-      typeof j.room !== 'string' ||
-      !j.room.trim()
-    ) {
-      return msg('🔒', 'No se recibió un acceso seguro. No es posible ingresar a la sala.');
-    }
-
+    if (j.code === 'SIN_SALA_JITSI') return msg('🔒', 'La sala de esta clase no está bien configurada (nombre inválido o vacío). Un administrador debe corregirla en Clases en Vivo → Editar.');
+    if (!res.ok) return msg(res.status === 409 ? '⏳' : '🔒', j.error || 'No se pudo abrir la sala.');
     await cargarJitsiApi(j.domain);
-
     if (!document.getElementById(hostId)) return;
-
-    if (_jitsiApi) {
-      try { _jitsiApi.dispose(); } catch (e) {}
-      _jitsiApi = null;
-    }
-
+    if (_jitsiApi) { try { _jitsiApi.dispose(); } catch (e) {} _jitsiApi = null; }
     host.innerHTML = '';
-
     _jitsiApi = new JitsiMeetExternalAPI(j.domain, {
-      roomName: j.room,
-      jwt: j.jwt,
-      parentNode: host,
-      width: '100%',
-      height: '100%',
-      userInfo: {
-        displayName: currentUser.displayName || ''
-      },
-      configOverwrite: {
-        prejoinConfig: { enabled: false },
-        disableDeepLinking: true
-      }
+      roomName: j.room, ...(j.jwt ? { jwt: j.jwt } : {}), parentNode: host, width: '100%', height: '100%',
+      userInfo: { displayName: currentUser.displayName || '' },
+      configOverwrite: { prejoinConfig: { enabled: false }, disableDeepLinking: true }
     });
+  } catch (e) { msg('⚠️', e.message); }
+}
 
-  } catch (e) {
-    msg('⚠️', e.message || 'No fue posible conectar con la sala.');
-  }
-} // Cierre de montarVideoJitsi
+/* Pantalla completa horizontal de la sala (pensada para celulares). Funciona en tres niveles:
+   1) API de pantalla completa + bloqueo de orientación (Android/Chrome); 2) si no hay API (iPhone) o el bloqueo falla con el
+   teléfono en vertical, la sala ocupa toda la pantalla y se rota 90° por CSS; 3) si el usuario gira el teléfono, se acomoda sola. */
+let _salaPc = { el: null, css: false };
+function _salaPcAjustar() {
+  const el = _salaPc.el; if (!el) return;
+  const vertical = window.innerHeight > window.innerWidth;
+  el.classList.toggle('rotada', vertical);   // en vertical, rotada; en horizontal (teléfono girado o bloqueo logrado), normal
+}
+function _salaPcSalir() {
+  const el = _salaPc.el; if (!el) return;
+  el.classList.remove('sala-pc', 'rotada');
+  const b = el.querySelector('.sala-pc-salir'); if (b) b.remove();
+  _salaPc.el = null;
+  window.removeEventListener('resize', _salaPcAjustar); window.removeEventListener('orientationchange', _salaPcAjustar);
+  document.removeEventListener('fullscreenchange', _salaPcCambioFs); document.removeEventListener('webkitfullscreenchange', _salaPcCambioFs);
+  try { screen.orientation && screen.orientation.unlock && screen.orientation.unlock(); } catch (e) {}
+  const fs = document.fullscreenElement || document.webkitFullscreenElement;
+  if (fs) { try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {} }
+}
+function _salaPcCambioFs() { if (_salaPc.el && !(document.fullscreenElement || document.webkitFullscreenElement) && !_salaPc.css) _salaPcSalir(); }
+async function pantallaCompletaSala() {
+  if (_salaPc.el) return _salaPcSalir();
+  const host = document.getElementById('jitsiHost');
+  const el = host && host.closest('.video-room');
+  if (!el) { toast('La sala todavía no está lista.', 'warning'); return; }
+  _salaPc = { el, css: false };
+  const btn = document.createElement('button'); btn.className = 'sala-pc-salir'; btn.type = 'button'; btn.textContent = '✕ Salir de pantalla completa';
+  btn.onclick = (ev) => { ev.stopPropagation(); _salaPcSalir(); };
+  el.appendChild(btn); el.classList.add('sala-pc');
+  const req = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (req) {
+    try {
+      await req.call(el);
+      document.addEventListener('fullscreenchange', _salaPcCambioFs); document.addEventListener('webkitfullscreenchange', _salaPcCambioFs);
+    } catch (e) { _salaPc.css = true; }
+  } else { _salaPc.css = true; }
+  try { if (screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape'); } catch (e) { /* sin bloqueo: se rota por CSS si el teléfono está en vertical */ }
+  window.addEventListener('resize', _salaPcAjustar); window.addEventListener('orientationchange', _salaPcAjustar);
+  setTimeout(_salaPcAjustar, 350);   // da tiempo a que el sistema gire la pantalla antes de decidir si rotar por CSS
+  setTimeout(_salaPcAjustar, 1000);
+}
+
 /* Reingreso a la sala (alumno desconectado, vuelta del almuerzo, token vencido): vuelve a leer el estado del bloque
    y pide un token NUEVO al Worker, que decide según el estado actual (no iniciado / cerrado → no entra). */
 async function reingresarSala(classId) {
@@ -4544,7 +4980,7 @@ async function renderTeacherRoom(mc, params={}) {
     <!-- VIDEO -->
     <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px">
       <div class="video-room">${videoEmbed}</div>
-      ${_esJitsi ? `<div style="padding:10px 14px;border-top:1px solid var(--border,#e5e7eb);font-size:12.5px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button class="btn btn-sm btn-secondary" onclick="reingresarSala('${classId}')">🔄 Reingresar a la sala</button><span style="color:var(--text-mid)">Si te desconectaste o la sala no carga, reingresa aquí. Se revisa el estado del bloque.</span></div>` : ''}
+      ${_esJitsi ? `<div style="padding:10px 14px;border-top:1px solid var(--border,#e5e7eb);font-size:12.5px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button class="btn btn-sm btn-secondary" onclick="reingresarSala('${classId}')">🔄 Reingresar a la sala</button><button class="btn btn-sm btn-secondary" onclick="pantallaCompletaSala()">⛶ Pantalla completa horizontal</button><span style="color:var(--text-mid)">Si te desconectaste o la sala no carga, reingresa aquí. Se revisa el estado del bloque.</span></div>` : ''}
     </div>
 
     <!-- COMUNICACIÓN SINCRÓNICA: chat en vivo -->
