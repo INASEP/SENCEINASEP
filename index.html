@@ -1068,9 +1068,7 @@ function updateSidebar() {
   const links = isAdmin ? [
     { label: '📊 Panel',           view: 'dashboard'    },
     { label: '📹 Clases en Vivo',  view: 'live-classes' },
-    { label: '➕ Nueva Clase',     view: 'new-class'    },
-    { label: '📥 Importar Excel',  view: 'import-classes' },
-    { label: '📚 Malla del Curso', view: 'malla'        },
+    { label: '📚 Cursos',          view: 'cursos'       },
     { label: '🧾 Matrículas',      view: 'matriculas'   },
     { label: '📖 Libro de Clases', view: 'libro-clases' },
     { label: '📜 Declaraciones Juradas', view: 'declaraciones' },
@@ -1113,6 +1111,7 @@ function navigate(view, params={}) {
     if (_teacherRTListener) { _teacherRTListener(); _teacherRTListener = null; }
   }
   if (_jitsiApi) { try { _jitsiApi.dispose(); } catch (e) {} _jitsiApi = null; }
+  _detenerVigilanciaSesion();
   if (_claseListener) { _claseListener(); _claseListener = null; }
   if (_avisoCierreTimer) { clearInterval(_avisoCierreTimer); _avisoCierreTimer = null; }
   if (_chatListener) { _chatListener(); _chatListener = null; }
@@ -1137,6 +1136,7 @@ function renderMain(view, params={}) {
     'import-classes':     renderImportClasses,
     'matriculas':         renderMatriculas,
     'malla':              renderMalla,
+    'cursos':             renderCursos,
     'attendance':         renderAttendance,
     'sence-log':          renderSenceLog,
     'sence-config':       renderSenceConfig,
@@ -1388,7 +1388,7 @@ async function renderNewClass(mc, params={}) {
         <div style="font-size:13px;line-height:1.9;border:1px solid var(--border);border-radius:8px;padding:8px 12px">
           ${data.segmentos.map(sg => `<div><span style="font-family:'DM Mono'">${escHtml(sg.ini)}–${escHtml(sg.fin)}</span> · ${escHtml(sg.titulo)} · <em>${escHtml(sg.profesorNombre||'sin profesor')}</em></div>`).join('')}
         </div>
-        <small>Los tramos y sus profesores se definen al importar el Excel. Para cambiarlos, elimina el bloque y vuelve a importar.</small>
+        <small>Los tramos vienen del Excel. Para cambiar el profesor de un tramo, hazlo en <a onclick="navigate('cursos',{cursoId:'${escHtml(data.cursoId||'')}'})">📚 Cursos → Calendario</a> (se guarda al instante).</small>
       </div>` : `
       <div class="form-group">
         <label>Profesor / Capacitador</label>
@@ -3815,6 +3815,27 @@ function urlEsJitsiPropia(u) {
   catch (e) { return true; }   // URL ilegible: no se muestra
 }
 let _jitsiApi = null, _jitsiScript = null;
+/* Un solo dispositivo por alumno: el Worker registra la sesión vigente en cada ingreso a la sala. Si el mismo alumno entra desde otro
+   aparato, el registro cambia y este dispositivo se desconecta con un aviso (el último que entra gana). */
+let _sesionSalaUnsub = null, _miSesionSala = null;
+function _detenerVigilanciaSesion() { if (_sesionSalaUnsub) { try { _sesionSalaUnsub(); } catch (e) {} } _sesionSalaUnsub = null; _miSesionSala = null; }
+function _vigilarSesionUnica(classId, sesionId) {
+  _detenerVigilanciaSesion();
+  if (!sesionId || currentRole !== 'student' || !currentUser) return;
+  _miSesionSala = sesionId;
+  try {
+    _sesionSalaUnsub = db.collection('sesionesSala').doc(`${classId}__${currentUser.uid}`).onSnapshot(snap => {
+      if (snap.metadata && snap.metadata.fromCache) return;
+      const d = snap.exists ? snap.data() : null;
+      if (!d || !d.sesionId || d.sesionId === _miSesionSala) return;
+      _detenerVigilanciaSesion();
+      if (_jitsiApi) { try { _jitsiApi.dispose(); } catch (e) {} _jitsiApi = null; }
+      const host = document.getElementById('jitsiHost');
+      if (host) host.innerHTML = `<div class="video-placeholder"><div class="icon">📱</div><p><strong>Tu sesión se abrió en otro dispositivo.</strong><br>Por seguridad solo puedes estar conectado desde un aparato a la vez, así que aquí se cerró.</p><button class="btn btn-primary" style="margin-top:12px" onclick="reingresarSala('${classId}')">Volver a entrar aquí</button></div>`;
+      toast('Tu sesión se abrió en otro dispositivo; esta se cerró.', 'warning', 8000);
+    }, () => {});
+  } catch (e) { /* sin vigilancia: el Worker igual registra al último dispositivo */ }
+}
 function cargarJitsiApi(domain) {
   if (window.JitsiMeetExternalAPI) return Promise.resolve();
   if (_jitsiScript) return _jitsiScript;
@@ -3833,7 +3854,7 @@ function cargarJitsiApi(domain) {
    ninguna URL de sala por su cuenta (sin iframe directo). Si el Worker no responde bien, no se entra. */
 async function montarVideoJitsi(hostId, classId, cls) {
   const host = document.getElementById(hostId); if (!host) return;
-  const msg = (icono, txt) => { if (_jitsiApi) { try { _jitsiApi.dispose(); } catch (e) {} _jitsiApi = null; } host.innerHTML = `<div class="video-placeholder"><div class="icon">${icono}</div><p>${escHtml(txt)}</p></div>`; };
+  const msg = (icono, txt) => { _detenerVigilanciaSesion(); if (_jitsiApi) { try { _jitsiApi.dispose(); } catch (e) {} _jitsiApi = null; } host.innerHTML = `<div class="video-placeholder"><div class="icon">${icono}</div><p>${escHtml(txt)}</p></div>`; };
   try {
     const res = await workerFetch('/api/jitsi/token', { method: 'POST', body: JSON.stringify({ classId }) });
     const j = await res.json().catch(() => ({}));
@@ -3843,6 +3864,7 @@ async function montarVideoJitsi(hostId, classId, cls) {
     if (!document.getElementById(hostId)) return;
     if (_jitsiApi) { try { _jitsiApi.dispose(); } catch (e) {} _jitsiApi = null; }
     host.innerHTML = '';
+    _vigilarSesionUnica(classId, j.sesionId);
     _jitsiApi = new JitsiMeetExternalAPI(j.domain, {
       roomName: j.room, ...(j.jwt ? { jwt: j.jwt } : {}), parentNode: host, width: '100%', height: '100%',
       userInfo: { displayName: currentUser.displayName || '' },
@@ -3950,7 +3972,7 @@ function validarCamposSence(linea, codSence, codigoCurso, codigoModulo) {
 ════════════════════════════════════════════════ */
 let _imp = { rows: [], profs: [], mapa: {} };
 
-async function renderImportClasses(mc) {
+async function renderImportClasses(mc, params = {}) {
   await loadSenceConfig();
   const tzOk = (Intl.DateTimeFormat().resolvedOptions().timeZone === 'America/Santiago');
   mc.innerHTML = `
@@ -4011,6 +4033,17 @@ async function renderImportClasses(mc) {
     </div>
 
     <div id="im_preview"></div>`;
+  if (params.cursoId) {   // agregar días a un curso existente: se reutilizan sus datos
+    try {
+      const ds = await db.collection('liveClasses').where('cursoId', '==', params.cursoId).get();
+      const cl = ds.docs.map(d => d.data()).sort((a, b) => (b.scheduledAt?.toMillis?.() || 0) - (a.scheduledAt?.toMillis?.() || 0))[0];
+      if (cl) {
+        const set = (id, v) => { const e = document.getElementById(id); if (e && v !== undefined && v !== null) e.value = v; };
+        set('im_curso', cl.courseName || ''); set('im_linea', String(cl.lineaCapacitacion || 3)); set('im_codSence', cl.codSence || ''); set('im_codigoCurso', cl.codigoCurso || '');
+        toast('Se completaron los datos del curso con los de sus clases anteriores. Revísalos y sube el Excel con los días nuevos.', 'info', 7000);
+      }
+    } catch (e) { /* el formulario queda en blanco */ }
+  }
 }
 
 function descargarPlantillaClases() {
@@ -4407,13 +4440,20 @@ function cerrarSesionDesdeAviso(attId) {
 }
 
 /* Profesor: iniciar / cerrar el bloque */
+function botonesBloqueProfesor(classId) {
+  return `<div class="flex gap-2 flex-wrap" style="margin-top:10px">
+      <button class="btn btn-danger" onclick="cerrarBloqueProfesor('${classId}')">🍽️ A almorzar / Terminar jornada</button>
+      <button class="btn btn-secondary" onclick="salirseDeSala()">🔁 Relevo: salir sin cerrar</button>
+    </div>
+    <div style="font-size:12px;color:var(--text-light);margin-top:6px">Al <strong>almuerzo o fin de jornada</strong> pulsa el botón rojo: los alumnos reciben el aviso para cerrar su sesión SENCE. Si solo <strong>cambia el profesor</strong>, usa "Relevo": el bloque sigue abierto, el siguiente entra a la misma sala y los alumnos no notan nada.</div>`;
+}
 async function iniciarBloqueProfesor(classId) {
   const btn = document.getElementById('btnIniciarBloque'); if (btn) btn.disabled = true;
   try {
     const j = await bloqueAccion('iniciar', classId);
     toast(j.yaActivo ? '✅ El bloque ya estaba en curso: retomas la clase.' : '✅ Bloque iniciado. Los alumnos ya pueden registrar su sesión SENCE.', 'success', 6000);
     const card = document.getElementById('bloqueEstadoCard');
-    if (card) card.innerHTML = '<strong>🔴 Bloque en curso.</strong> Los alumnos pueden registrar su asistencia SENCE.';
+    if (card) card.innerHTML = '<strong>🔴 Bloque en curso.</strong> Los alumnos pueden registrar su asistencia SENCE.' + botonesBloqueProfesor(classId);
     if (card) card.style.borderColor = 'var(--success)';
   } catch (e) { if (btn) btn.disabled = false; toast('❌ ' + e.message, 'error', 8000); }
 }
@@ -4436,7 +4476,157 @@ async function cargarMalla(cursoId) {
   catch (e) { console.warn('malla', e.message); return null; }
 }
 
-async function renderMalla(mc) {
+/* ════════════════════════════════════════════════
+   📚 CURSOS — una sola puerta: curso → módulos → calendario (admin)
+   Usa los mismos datos de siempre (liveClasses, mallas, matriculas); no cambia cómo funcionan SENCE, el Worker ni las salas.
+════════════════════════════════════════════════ */
+let _cur = { clases: [], mallas: new Map(), profs: [], matr: [], cursos: new Map(), cursoId: '', ver: 'proximos' };
+const _diaSem = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+function _cursoIdDe(c) { return c.cursoId || slugCurso(c.courseName || ''); }
+function _fechaCorta(d) { return d ? `${_diaSem[d.getDay()]} ${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}` : '—'; }
+function _horaCL(d) { return d ? d.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : ''; }
+function _tsDate(x) { return x && x.toDate ? x.toDate() : (x instanceof Date ? x : null); }
+
+async function renderCursos(mc, params = {}) {
+  if (currentRole !== 'admin') { mc.innerHTML = '<div class="empty-state"><div class="icon">🔒</div><p>Solo el administrador puede ver esta sección.</p></div>'; return; }
+  mc.innerHTML = '<div class="empty-state"><div class="icon">⏳</div><p>Cargando cursos...</p></div>';
+  try {
+    const [cs, ms, mt, profs] = await Promise.all([db.collection('liveClasses').get(), db.collection('mallas').get(), db.collection('matriculas').get(), cargarProfesoresLista()]);
+    _cur.clases = cs.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => _cursoIdDe(c));
+    _cur.mallas = new Map(ms.docs.map(d => [d.id, d.data()]));
+    _cur.matr = mt.docs.map(d => d.data());
+    _cur.profs = profs;
+    _cur.cursos = new Map();
+    _cur.clases.forEach(c => { const id = _cursoIdDe(c); if (!_cur.cursos.has(id)) _cur.cursos.set(id, c.courseName || id); });
+    _cur.mallas.forEach((m, id) => { if (!_cur.cursos.has(id)) _cur.cursos.set(id, m.courseName || id); });
+  } catch (e) { mc.innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>${escHtml(e.message)}</p></div>`; return; }
+  if (params.cursoId && _cur.cursos.has(params.cursoId)) { _cur.cursoId = params.cursoId; _cur.ver = 'proximos'; pintarCursoDetalle(mc); }
+  else { _cur.cursoId = ''; pintarListaCursos(mc); }
+}
+function _mcCursos() { return document.getElementById('mainContent'); }
+
+function pintarListaCursos(mc) {
+  mc = mc || _mcCursos();
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const tarjetas = [..._cur.cursos].map(([id, nombre]) => {
+    const bl = _cur.clases.filter(c => _cursoIdDe(c) === id);
+    const fechas = bl.map(c => _tsDate(c.scheduledAt)).filter(Boolean).sort((a, b) => a - b);
+    const sinProf = bl.filter(c => c.status !== 'finished' && _tsDate(c.scheduledAt) >= hoy && (c.segmentos || []).some(s => !s.profesorUid)).length;
+    const matr = _cur.matr.filter(m => m.cursoId === id).length;
+    const ram = (_cur.mallas.get(id)?.asignaturas || []).length;
+    const prox = bl.filter(c => c.status !== 'finished' && _tsDate(c.scheduledAt) >= hoy).length;
+    return `<div class="card" style="cursor:pointer" onclick="navigate('cursos',{cursoId:'${escHtml(id)}'})">
+      <div class="card-header"><h3>📚 ${escHtml(nombre)}</h3><span class="badge badge-green">${prox} bloque(s) por venir</span></div>
+      <div style="font-size:13px;color:var(--text-mid);display:flex;gap:18px;flex-wrap:wrap">
+        <span>🗓️ ${fechas.length ? escHtml(_fechaCorta(fechas[0]).split(' ')[1]) + ' → ' + escHtml(_fechaCorta(fechas[fechas.length - 1]).split(' ')[1]) : 'sin fechas'}</span>
+        <span>📋 ${ram} módulo(s)</span><span>🎓 ${matr} alumno(s) matriculado(s)</span><span>📹 ${bl.length} bloque(s) en total</span></div>
+      ${sinProf ? `<div style="margin-top:8px"><span class="badge badge-orange">⚠️ ${sinProf} bloque(s) con tramos sin profesor</span></div>` : ''}
+    </div>`;
+  }).join('');
+  mc.innerHTML = `
+    <div class="page-header">
+      <div><h2>📚 Cursos</h2><div class="breadcrumb">Un curso, sus módulos con profesor y su calendario de días</div></div>
+      <button class="btn btn-primary" onclick="navigate('import-classes')">➕ Nuevo curso (desde Excel)</button>
+    </div>
+    ${tarjetas || '<div class="card"><div class="empty-state"><div class="icon">📭</div><p>Aún no hay cursos.<br>Pulsa <strong>Nuevo curso</strong>: llenas los datos una vez y subes un Excel con todos los días, módulos y profesores.</p></div></div>'}
+    <div class="card" style="margin-top:20px"><details><summary style="cursor:pointer;font-weight:700;color:var(--green-900)">⚙️ Avanzado</summary>
+      <p style="font-size:12.5px;color:var(--text-mid);margin:10px 0">Para una clase suelta, fuera de un curso programado por Excel.</p>
+      <button class="btn btn-secondary btn-sm" onclick="navigate('new-class')">➕ Crear una clase suelta</button>
+      <button class="btn btn-secondary btn-sm" onclick="navigate('live-classes')">📹 Ver todas las clases en vivo</button></details></div>`;
+}
+
+function pintarCursoDetalle(mc) {
+  mc = mc || _mcCursos();
+  const id = _cur.cursoId, nombre = _cur.cursos.get(id) || id;
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const todos = _cur.clases.filter(c => _cursoIdDe(c) === id).sort((a, b) => (_tsDate(a.scheduledAt) || 0) - (_tsDate(b.scheduledAt) || 0));
+  const lista = todos.filter(c => _cur.ver === 'todos' || c.status !== 'finished' && _tsDate(c.scheduledAt) >= hoy);
+  const malla = _cur.mallas.get(id)?.asignaturas || [];
+  const agend = {}; todos.forEach(c => (c.segmentos || []).forEach(s => { const k = normTxt(s.titulo); agend[k] = (agend[k] || 0) + (s.durMin || 0); }));
+  const filasMod = malla.map(a => { const h = Math.round((agend[normTxt(a.nombre)] || 0) / 6) / 10;
+    return `<tr><td><strong>${escHtml(a.nombre)}</strong></td><td>${escHtml(String(a.horas || 0))} h</td><td>${h} h</td><td>${a.profesorNombre ? escHtml(a.profesorNombre) : '<span style="color:var(--text-light)">sin titular</span>'}</td></tr>`; }).join('');
+  const opts = (sel) => `<option value="">— sin profesor —</option>` + _cur.profs.map(p => `<option value="${escHtml(p.uid)}" ${p.uid === sel ? 'selected' : ''}>${escHtml(p.name)}</option>`).join('');
+  const bloques = lista.map(c => {
+    const d = _tsDate(c.scheduledAt); const fin = c.status === 'finished';
+    const est = c.status === 'active' ? '<span class="badge badge-live">🔴 en curso</span>' : fin ? '<span class="badge badge-gray">cerrado</span>' : '<span class="badge badge-green">programado</span>';
+    const segs = (c.segmentos || []).map((s, i) => `<tr><td style="font-family:'DM Mono';white-space:nowrap">${escHtml(s.ini)}–${escHtml(s.fin)}</td><td>${escHtml(s.titulo)}</td>
+      <td><select ${fin ? 'disabled' : ''} onchange="cursoCambiarProfesor('${c.id}',${i},this.value)" style="min-width:180px;${s.profesorUid ? '' : 'border-color:var(--warning)'}">${opts(s.profesorUid)}</select></td></tr>`).join('');
+    return `<div style="border:1px solid var(--border,#e5e7eb);border-radius:10px;padding:10px 12px;margin-bottom:10px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px"><strong>${escHtml(_fechaCorta(d))}</strong><span style="color:var(--text-mid)">${escHtml(_horaCL(d))} · ${escHtml(String(c.duration || ''))} min</span>${est}
+        <span style="flex:1"></span><button class="btn btn-sm btn-secondary" onclick="editClass('${c.id}')">⚙️ Opciones</button></div>
+      ${segs ? `<div class="table-wrap"><table><thead><tr><th>Horario</th><th>Módulo</th><th>Profesor</th></tr></thead><tbody>${segs}</tbody></table></div>` : `<div style="font-size:12.5px;color:var(--text-light)">${escHtml(c.title || '')} · ${c.profesorNombre ? 'Profesor: ' + escHtml(c.profesorNombre) : 'sin profesor'}</div>`}
+    </div>`;
+  }).join('');
+  const faltan = todos.filter(c => c.status !== 'finished' && (c.segmentos || []).some(s => !s.profesorUid)).length;
+  mc.innerHTML = `
+    <div class="page-header">
+      <div><h2>📚 ${escHtml(nombre)}</h2><div class="breadcrumb"><a onclick="navigate('cursos')">Cursos</a> › ${escHtml(nombre)}</div></div>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn btn-secondary" onclick="navigate('import-classes',{cursoId:'${escHtml(id)}'})">➕ Agregar días (Excel)</button>
+        <button class="btn btn-secondary" onclick="navigate('matriculas')">🎓 Matrículas</button>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3>📋 Módulos y profesor titular</h3><button class="btn btn-sm btn-secondary" onclick="navigate('malla',{cursoId:'${escHtml(id)}'})">✏️ Editar módulos</button></div>
+      ${malla.length ? `<div class="table-wrap"><table><thead><tr><th>Módulo</th><th>Horas del programa</th><th>Horas agendadas</th><th>Titular</th></tr></thead><tbody>${filasMod}</tbody></table></div>`
+        : '<p style="font-size:13px;color:var(--text-mid)">Este curso aún no tiene módulos definidos. Pulsa <strong>Editar módulos</strong> → "Crear desde los bloques agendados".</p>'}
+    </div>
+    <div class="card">
+      <div class="card-header"><h3>🗓️ Calendario</h3>
+        <div class="flex gap-2 flex-wrap">
+          <select onchange="_cur.ver=this.value;pintarCursoDetalle()" style="max-width:190px"><option value="proximos" ${_cur.ver === 'proximos' ? 'selected' : ''}>Próximos bloques</option><option value="todos" ${_cur.ver === 'todos' ? 'selected' : ''}>Todos (incluye cerrados)</option></select>
+          <button class="btn btn-sm btn-primary" onclick="cursoCompletarTitulares()">🪄 Completar profesores faltantes</button></div></div>
+      <p style="font-size:12.5px;color:var(--text-mid);margin:0 0 12px">Cambia el profesor de cualquier tramo con el selector: se guarda al instante. Los relevos entre profesores ocurren dentro del mismo bloque y la misma sala; los alumnos no notan el cambio.
+        ${faltan ? `<br><span style="color:var(--warning)">⚠️ Hay ${faltan} bloque(s) con tramos sin profesor.</span>` : ''}</p>
+      ${bloques || '<div class="empty-state"><p>No hay bloques para mostrar.</p></div>'}
+    </div>`;
+}
+
+async function cursoCambiarProfesor(classId, idx, uid) {
+  try {
+    const ref = db.collection('liveClasses').doc(classId); const d = await ref.get(); if (!d.exists) throw new Error('El bloque ya no existe');
+    const c = d.data(); if (c.status === 'finished') throw new Error('El bloque ya está cerrado');
+    const p = uid ? _cur.profs.find(x => x.uid === uid) : null;
+    if (uid && !p) throw new Error('Profesor no encontrado');
+    const segs = (c.segmentos || []).map((s, i) => i === idx ? { ...s, profesorUid: p ? p.uid : '', profesorNombre: p ? p.name : '' } : s);
+    await ref.update(_camposProfesores(segs));
+    const loc = _cur.clases.find(x => x.id === classId); if (loc) Object.assign(loc, _camposProfesores(segs));
+    toast('✅ Profesor actualizado.', 'success', 2500);
+  } catch (e) { toast('❌ ' + e.message, 'error', 6000); pintarCursoDetalle(); }
+}
+function _camposProfesores(segs) {
+  const uids = [...new Set(segs.map(s => s.profesorUid).filter(Boolean))];
+  const nombres = [...new Set(segs.map(s => s.profesorNombre).filter(Boolean))];
+  return { segmentos: segs, profesoresUids: uids, profesorUid: uids[0] || '', profesorNombre: nombres.join(', '),
+    description: segs.map(s => `${s.ini}-${s.fin} ${s.titulo}${s.profesorNombre ? ' (' + s.profesorNombre + ')' : ''}`).join(' | ').slice(0, 900),
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+}
+/* Completa SOLO los tramos sin profesor con el titular del módulo. Nunca cambia un profesor ya asignado (respeta los relevos). */
+function cursoCompletarTitulares() {
+  const malla = _cur.mallas.get(_cur.cursoId)?.asignaturas || [];
+  const tit = new Map(malla.filter(a => a.profesorUid).map(a => [normTxt(a.nombre), a]));
+  const cambios = [];
+  _cur.clases.filter(c => _cursoIdDe(c) === _cur.cursoId && c.status !== 'finished').forEach(c => {
+    let toca = false;
+    const segs = (c.segmentos || []).map(s => { const t = !s.profesorUid && tit.get(normTxt(s.titulo)); if (t) { toca = true; return { ...s, profesorUid: t.profesorUid, profesorNombre: t.profesorNombre || '' }; } return s; });
+    if (toca) cambios.push({ c, segs });
+  });
+  if (!cambios.length) return toast(malla.length ? 'No hay tramos sin profesor que tengan titular definido.' : 'Primero define los módulos con su profesor titular.', 'info', 5000);
+  if (!confirm(`Se asignará el profesor titular a los tramos que hoy no tienen profesor, en ${cambios.length} bloque(s) no cerrados.\n\nNo se cambia ningún profesor ya asignado.\n\n¿Continuar?`)) return;
+  (async () => {
+    try {
+      for (let i = 0; i < cambios.length; i += 400) {
+        const b = db.batch();
+        cambios.slice(i, i + 400).forEach(x => b.update(db.collection('liveClasses').doc(x.c.id), _camposProfesores(x.segs)));
+        await b.commit();
+      }
+      cambios.forEach(x => Object.assign(x.c, _camposProfesores(x.segs)));
+      toast(`✅ Listo: ${cambios.length} bloque(s) completados.`, 'success', 5000); pintarCursoDetalle();
+    } catch (e) { toast('❌ ' + e.message, 'error', 7000); }
+  })();
+}
+
+async function renderMalla(mc, params = {}) {
   mc.innerHTML = `
     <div class="page-header">
       <div><h2>📚 Malla del Curso</h2><div class="breadcrumb">Ramos, horas, módulo SIC y profesor titular de cada ramo</div></div>
@@ -4456,6 +4646,7 @@ async function renderMalla(mc) {
     const sel = document.getElementById('ml_curso');
     if (!_malla.cursos.size) { document.getElementById('ml_body').innerHTML = '<div class="empty-state"><div class="icon">📭</div><p>Aún no hay cursos. Importa clases o crea un curso nuevo.</p></div>'; return; }
     sel.innerHTML = [..._malla.cursos].map(([id, n]) => `<option value="${escHtml(id)}">${escHtml(n)}</option>`).join('');
+    if (params.cursoId && _malla.cursos.has(params.cursoId)) sel.value = params.cursoId;
     cargarMallaCurso(sel.value);
   } catch (e) { document.getElementById('ml_body').innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>${escHtml(e.message)}</p></div>`; }
 }
@@ -4948,7 +5139,7 @@ async function renderTeacherRoom(mc, params={}) {
     <!-- ESTADO DEL BLOQUE -->
     <div class="card" id="bloqueEstadoCard" style="margin-bottom:16px;border:2px solid ${cls.status==='active'?'var(--success)':'var(--warning)'}">
       ${cls.status === 'active'
-        ? `<strong>🔴 Bloque en curso</strong>${cls.bloqueIniciadoAt ? ' desde las ' + cls.bloqueIniciadoAt.toDate().toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'}) : ''}. Los alumnos pueden registrar su asistencia SENCE.`
+        ? `<strong>🔴 Bloque en curso</strong>${cls.bloqueIniciadoAt ? ' desde las ' + cls.bloqueIniciadoAt.toDate().toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'}) : ''}. Los alumnos pueden registrar su asistencia SENCE.${botonesBloqueProfesor(classId)}`
         : cls.status === 'finished'
         ? `<strong>⏹ Bloque cerrado</strong>${cls.bloqueCerradoAt ? ' a las ' + cls.bloqueCerradoAt.toDate().toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'}) : ''}. Solo un administrador puede reabrirlo.`
         : `<strong>⏳ El bloque aún no inicia.</strong> Los alumnos no pueden registrarse en SENCE hasta que lo inicies.
@@ -5012,14 +5203,11 @@ async function renderTeacherRoom(mc, params={}) {
       <div id="libroClaseEstado" style="margin-top:10px"></div>
     </div>
 
-    <!-- SALIR / CERRAR BLOQUE -->
+    <!-- SALIR / CERRAR BLOQUE (los botones principales están arriba, en el estado del bloque) -->
     <div class="card" style="margin-bottom:24px">
-      <p style="font-size:12.5px;color:var(--text-mid);margin-bottom:10px">
-        <strong>Relevo de profesor:</strong> usa "Salir de la sala"; el bloque sigue abierto y el siguiente profesor lo retoma en la misma sala.<br>
-        <strong>Almuerzo o fin de jornada:</strong> usa "Cerrar bloque"; los alumnos recibirán el aviso para cerrar su sesión SENCE.</p>
       <div class="flex gap-2 flex-wrap">
-        <button class="btn btn-secondary" onclick="salirseDeSala()">🚪 Salir de la sala (relevo)</button>
-        ${cls.status === 'active' ? `<button class="btn btn-danger" onclick="cerrarBloqueProfesor('${classId}')">⏹ Cerrar bloque (almuerzo / fin de jornada)</button>` : ''}
+        <button class="btn btn-secondary" onclick="salirseDeSala()">🔁 Relevo: salir sin cerrar</button>
+        ${cls.status === 'active' ? `<button class="btn btn-danger" onclick="cerrarBloqueProfesor('${classId}')">🍽️ A almorzar / Terminar jornada</button>` : ''}
       </div>
     </div>`;
 
