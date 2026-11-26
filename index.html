@@ -353,6 +353,25 @@ iframe.video-frame { width:100%; height:100%; min-height:500px; border:none; }
 .jitsi-host iframe { width:100%; height:100%; min-height:500px; border:none; }
 /* Pantalla completa de la sala (celulares): horizontal. Se usa la API de pantalla completa + bloqueo de orientación;
    si el equipo no las permite (iPhone), la sala ocupa toda la pantalla y se rota 90° por CSS. */
+.sala-prof { display:flex; gap:14px; align-items:flex-start; margin-bottom:16px; }
+.sala-prof > .sala-video { flex:1 1 0; min-width:0; margin-bottom:0 !important; }
+.sala-prof > .lp-card { flex:0 0 330px; width:330px; margin-bottom:0 !important; max-height:78vh; display:flex; flex-direction:column; padding:10px 12px; }
+@media (max-width: 1000px) { .sala-prof { flex-direction:column; } .sala-prof > .lp-card { flex:1 1 auto; width:100%; max-height:none; } }
+.lp-head { font-size:12px; font-weight:700; color:var(--green-900); display:flex; justify-content:space-between; align-items:center; gap:6px; margin-bottom:6px; }
+.lp-resumen { font-size:11px; color:var(--text-mid); margin-bottom:6px; line-height:1.5; }
+.lp-acciones { display:flex; gap:5px; flex-wrap:wrap; margin-bottom:8px; }
+.lp-acciones button { font-size:11px; padding:4px 8px; border-radius:6px; border:1px solid var(--border,#d9dfd9); background:#fff; cursor:pointer; }
+.lp-acciones button.pri { background:var(--primary); color:#fff; border-color:var(--primary); }
+.lp-lista { overflow:auto; flex:1; border-top:1px solid var(--border,#e5e7eb); }
+.lp-row { display:flex; align-items:center; gap:6px; padding:3px 2px; font-size:12px; line-height:1.25; border-bottom:1px solid #f0f2f0; }
+.lp-row .lp-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.lp-row .lp-tags { font-size:10.5px; color:var(--text-mid); white-space:nowrap; }
+.lp-row .lp-b { font-size:11px; padding:1px 6px; border:1px solid var(--border,#d9dfd9); background:#fff; border-radius:5px; cursor:pointer; }
+.lp-dot { font-size:9px; } .lp-on { color:#1e9e4f; } .lp-off { color:#b8bdb8; } .lp-warn { color:#d98a00; }
+.llamado-ov { position:fixed; inset:0; background:rgba(19,42,22,.88); z-index:10000; display:flex; align-items:center; justify-content:center; padding:20px; }
+.llamado-ov .box { background:#fff; border-radius:18px; max-width:440px; width:100%; padding:28px 24px; text-align:center; border-top:6px solid var(--gold,#F2D01A); }
+.llamado-ov h2 { margin:0 0 10px; color:var(--green-900); font-size:24px; } .llamado-ov p { font-size:17px; line-height:1.45; margin:0 0 18px; }
+.llamado-ov button { font-size:20px; padding:16px 26px; width:100%; border-radius:12px; border:none; background:var(--primary); color:#fff; font-weight:700; cursor:pointer; }
 .video-room.sala-pc { position:fixed !important; top:0; left:0; width:100vw !important; height:100vh !important; height:100dvh !important; max-width:none !important; z-index:9999; background:#000; margin:0; border-radius:0; }
 .video-room.sala-pc.rotada { top:0; left:100vw; width:100vh !important; height:100vw !important; transform-origin:top left; transform:rotate(90deg); }
 .video-room.sala-pc .jitsi-host, .video-room.sala-pc .jitsi-host iframe { min-height:0; height:100%; }
@@ -4068,7 +4087,9 @@ async function montarVideoJitsi(hostId, classId, cls) {
     _jitsiApi = new JitsiMeetExternalAPI(j.domain, {
       roomName: j.room, ...(j.jwt ? { jwt: j.jwt } : {}), parentNode: host, width: '100%', height: '100%',
       userInfo: { displayName: currentUser.displayName || '' },
-      configOverwrite: { prejoinConfig: { enabled: false }, disableDeepLinking: true, subject: textoRamo(cls) || (cls.courseName || '') }
+      configOverwrite: { prejoinConfig: { enabled: false }, disableDeepLinking: true, subject: textoRamo(cls) || (cls.courseName || ''),
+        // Alumnos: entran con cámara y micrófono apagados y reciben pocos videos a la vez (sala liviana con 30+ personas). Profesor/admin: sin límites.
+        ...(j.moderator ? {} : { startWithAudioMuted: true, startWithVideoMuted: true, channelLastN: 8 }) }
     });
   } catch (e) { msg('⚠️', e.message); }
 }
@@ -4765,11 +4786,46 @@ async function bloqueAccion(accion, classId) {
 
 /* Alumno: escucha el estado del bloque (1 documento) */
 let _claseListener = null, _avisoCierreTimer = null, _avisoClassId = '';
+/* ── PASAR LISTA: el profesor llama y el alumno confirma presencia con cámara y micrófono (un clic suyo; el navegador no permite activarlos sin él) ── */
+let _llamadoVisto = '';
+function procesarLlamado(classId, ll) {
+  if (currentRole !== 'student' || !ll || !ll.id || ll.id === _llamadoVisto) return;
+  _llamadoVisto = ll.id;
+  const at = ll.at && ll.at.toMillis ? ll.at.toMillis() : Date.now();
+  if (Date.now() - at > 3 * 60000) return;                                         // llamados viejos no se muestran
+  if (Array.isArray(ll.uids) && ll.uids.length && !ll.uids.includes(currentUser.uid)) return;   // llamado a otro alumno
+  const ov = document.getElementById('llamadoOv'); if (ov) ov.remove();
+  const d = document.createElement('div'); d.className = 'llamado-ov'; d.id = 'llamadoOv';
+  d.innerHTML = `<div class="box"><h2>✋ Pasando lista</h2><p>El profesor está pasando lista.<br>Toque el botón para <strong>activar su cámara y micrófono</strong> y quedar presente.</p><button id="llamadoBtn">✅ Estoy presente</button></div>`;
+  document.body.appendChild(d);
+  document.getElementById('llamadoBtn').onclick = () => responderLlamado(classId, ll.id);
+}
+async function responderLlamado(classId, llamadoId) {
+  const btn = document.getElementById('llamadoBtn'); if (btn) { btn.disabled = true; btn.textContent = 'Registrando...'; }
+  let cam = false, mic = false;
+  if (_jitsiApi) {
+    try {
+      if (await _jitsiApi.isAudioMuted()) _jitsiApi.executeCommand('toggleAudio');
+      if (await _jitsiApi.isVideoMuted()) _jitsiApi.executeCommand('toggleVideo');
+      await new Promise(r => setTimeout(r, 1800));
+      mic = !(await _jitsiApi.isAudioMuted()); cam = !(await _jitsiApi.isVideoMuted());
+    } catch (e) { console.warn('llamado', e.message); }
+  }
+  try {
+    const me = (await db.collection('users').doc(currentUser.uid).get()).data() || {};
+    await db.collection('pasesLista').doc(`${classId}__${llamadoId}__${currentUser.uid}`).set({
+      classId, llamadoId, uid: currentUser.uid, nombre: me.name || currentUser.displayName || '', rut: me.rut || '',
+      camara: cam, microfono: mic, at: firebase.firestore.FieldValue.serverTimestamp() });
+    const ov = document.getElementById('llamadoOv');
+    if (ov) { ov.querySelector('.box').innerHTML = `<h2>✅ Presente</h2><p>Quedó registrado.${cam ? '' : '<br><small>Su cámara no se activó: si el profesor lo pide, actívela con el botón de la cámara.</small>'}</p>`; setTimeout(() => ov.remove(), 2500); }
+  } catch (e) { toast('❌ No se pudo registrar: ' + e.message, 'error', 7000); const ov = document.getElementById('llamadoOv'); if (ov) ov.remove(); }
+}
 function escucharEstadoClase(classId, estadoInicial, attId) {
   if (_claseListener) { _claseListener(); _claseListener = null; }
   let prev = estadoInicial;
   _claseListener = db.collection('liveClasses').doc(classId).onSnapshot(doc => {
     if (!doc.exists) return;
+    procesarLlamado(classId, doc.data().llamado);
     const st = doc.data().status;
     if (st === prev) return;
     const antes = prev; prev = st;
@@ -5604,22 +5660,19 @@ async function renderTeacherRoom(mc, params={}) {
       </div>
     </div>
 
-    <!-- ESTADO CLASE -->
-    <div class="card" style="margin-bottom:16px">
-      <div class="card-header">
-        <h3>📊 Estado de la Clase en Tiempo Real</h3>
-        <button class="btn btn-sm btn-secondary" onclick="recargarAlumnosRTDB('${classId}')">🔄 Actualizar</button>
-      </div>
-      <div id="teacherAlumnosRT">
-        <div class="empty-state"><div class="icon">⏳</div><p>Cargando alumnos...</p></div>
-      </div>
-    </div>
-
+    <div class="sala-prof">
     <!-- VIDEO -->
-    <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px">
+    <div class="card sala-video" style="padding:0;overflow:hidden;margin-bottom:16px">
       ${_ramoHost(cls)}
       <div class="video-room">${videoEmbed}</div>
       ${_esJitsi ? `<div style="padding:10px 14px;border-top:1px solid var(--border,#e5e7eb);font-size:12.5px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button class="btn btn-sm btn-secondary" onclick="reingresarSala('${classId}')">🔄 Reingresar a la sala</button><button class="btn btn-sm btn-secondary" onclick="pantallaCompletaSala()">⛶ Pantalla completa horizontal</button><span style="color:var(--text-mid)">Si te desconectaste o la sala no carga, reingresa aquí. Se revisa el estado del bloque.</span></div>` : ''}
+    </div>
+
+    <!-- LISTA DE ASISTENCIA (junto al video, compacta) -->
+    <div class="card lp-card" id="listaProfe">
+      <div class="lp-head"><span>👥 Lista de la clase</span><button class="btn btn-sm btn-secondary" style="font-size:10.5px;padding:2px 7px" onclick="recargarAlumnosRTDB('${classId}')">🔄</button></div>
+      <div id="teacherAlumnosRT"><div class="empty-state" style="padding:14px"><p style="font-size:12px">Cargando alumnos...</p></div></div>
+    </div>
     </div>
 
     <!-- COMUNICACIÓN SINCRÓNICA: chat en vivo -->
@@ -5743,55 +5796,68 @@ async function salirseDeSala() {
   navigate('live-classes');
 }
 
+let _lp = null;
 function cargarAlumnosEnVivoProfesor(classId) {
   const cont = document.getElementById('teacherAlumnosRT');
   if (!cont) return;
-
-  // Suscripción en tiempo real
-  if (_teacherRTListener) _teacherRTListener();
-  _teacherRTListener = db.collection('senceAttendance')
-    .where('classId','==',classId)
-    .onSnapshot(snap => {
-      const cont2 = document.getElementById('teacherAlumnosRT');
-      if (!cont2) { if(_teacherRTListener){_teacherRTListener();_teacherRTListener=null;} return; }
-
-      if (snap.empty) {
-        cont2.innerHTML = '<div class="empty-state"><div class="icon">📭</div><p>Ningún alumno ha iniciado sesión SENCE aún.</p></div>';
-        return;
-      }
-
-      const abiertos = snap.docs.filter(d => d.data().sessionOpen === true).length;
-      cont2.innerHTML = `
-        <div style="margin-bottom:12px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">
-          <span style="font-size:13px;color:var(--text-mid)">Total registros: <strong>${snap.size}</strong></span>
-          <span class="badge badge-green">🟢 Sesiones abiertas: ${abiertos}</span>
-          <span class="badge badge-gray">🔴 Cerradas: ${snap.size - abiertos}</span>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Alumno</th><th>RUN</th><th>Estado SENCE</th><th>Inicio Sesión</th><th>Última actividad</th></tr></thead>
-            <tbody>
-              ${snap.docs.map(d => {
-                const a = d.data();
-                const open = a.sessionOpen === true;
-                return `<tr class="participant-row">
-                  <td><div style="display:flex;align-items:center;gap:8px">
-                    <div class="participant-avatar">${(a.userName||'?').slice(0,2).toUpperCase()}</div>
-                    <span>${escHtml(a.userName||a.userEmail||'—')}</span>
-                  </div></td>
-                  <td><span style="font-family:'DM Mono';font-size:12px">${escHtml(a.runAlumno||'—')}</span></td>
-                  <td><span class="badge ${open?'badge-green':'badge-gray'}">${open?'✅ Abierta':'⛔ Cerrada'}</span></td>
-                  <td style="font-size:12px">${fmtDateTime(a.inicioSesion)}</td>
-                  <td style="font-size:12px">${a.lastSeen ? fmtDateTime(a.lastSeen) : '—'}</td>
-                </tr>`;
-              }).join('')}
-            </tbody>
-          </table>
-        </div>`;
-    }, err => {
-      const cont2 = document.getElementById('teacherAlumnosRT');
-      if (cont2) cont2.innerHTML = `<p style="color:var(--danger);padding:12px">${err.message}</p>`;
-    });
+  if (_teacherRTListener) { _teacherRTListener(); _teacherRTListener = null; }
+  _lp = { classId, cursoId: '', mats: [], att: [], pases: new Map(), llamadoId: '', llamadoUids: [], sala: new Set() };
+  const unsubs = [];
+  const timer = setInterval(async () => {   // quiénes están hoy dentro de la sala de video (por nombre)
+    try { if (_jitsiApi && _jitsiApi.getParticipantsInfo) { _lp.sala = new Set(_jitsiApi.getParticipantsInfo().map(x => normTxt(x.displayName || ''))); pintarListaProfe(); } } catch (e) {}
+  }, 15000);
+  unsubs.push(() => clearInterval(timer));
+  db.collection('liveClasses').doc(classId).get().then(async d => {
+    const c = d.data() || {}; _lp.cursoId = c.cursoId || '';
+    if (_lp.cursoId) { try { const m = await db.collection('matriculas').where('cursoId', '==', _lp.cursoId).get(); _lp.mats = m.docs.map(x => x.data()).filter(x => x.estado !== 'retirado'); pintarListaProfe(); } catch (e) { console.warn('matriculas', e.message); } }
+  }).catch(() => {});
+  unsubs.push(db.collection('senceAttendance').where('classId', '==', classId).onSnapshot(snap => {
+    if (!document.getElementById('teacherAlumnosRT')) { if (_teacherRTListener) { _teacherRTListener(); _teacherRTListener = null; } return; }
+    _lp.att = snap.docs.map(d => d.data()); pintarListaProfe();
+  }, err => { const c2 = document.getElementById('teacherAlumnosRT'); if (c2) c2.innerHTML = `<p style="color:var(--danger);font-size:12px">${escHtml(err.message)}</p>`; }));
+  unsubs.push(db.collection('liveClasses').doc(classId).onSnapshot(d => { const ll = (d.data() || {}).llamado; if (ll && ll.id !== _lp.llamadoId) { _lp.llamadoId = ll.id; _lp.llamadoUids = Array.isArray(ll.uids) ? ll.uids : []; _lp.pases = new Map(); pintarListaProfe(); } }, () => {}));
+  unsubs.push(db.collection('pasesLista').where('classId', '==', classId).onSnapshot(snap => {
+    const m = new Map(); snap.docs.forEach(d => { const x = d.data(); if (x.llamadoId === _lp.llamadoId) m.set(x.uid, x); }); _lp.pases = m; pintarListaProfe();
+  }, () => {}));
+  _teacherRTListener = () => unsubs.forEach(u => { try { u(); } catch (e) {} });
+}
+function pintarListaProfe() {
+  const cont = document.getElementById('teacherAlumnosRT'); if (!cont || !_lp) return;
+  const porUid = new Map(); _lp.att.forEach(a => { const k = a.userId; const p = porUid.get(k); if (!p || (a.sessionOpen && !p.sessionOpen)) porUid.set(k, a); });
+  const filas = new Map();
+  _lp.mats.forEach(m => filas.set(m.userId, { uid: m.userId, nombre: m.nombre || '—' }));
+  porUid.forEach((a, k) => { if (!filas.has(k)) filas.set(k, { uid: k, nombre: a.userName || a.userEmail || '—' }); });
+  const lista = [...filas.values()].sort((x, y) => x.nombre.localeCompare(y.nombre));
+  if (!lista.length) { cont.innerHTML = '<div class="empty-state" style="padding:14px"><p style="font-size:12px">Aún no hay alumnos matriculados ni conectados.</p></div>'; return; }
+  const enSence = lista.filter(f => porUid.get(f.uid)?.sessionOpen === true).length;
+  const llamados = _lp.llamadoUids.length ? lista.filter(f => _lp.llamadoUids.includes(f.uid)) : lista;
+  const presentes = _lp.llamadoId ? llamados.filter(f => _lp.pases.has(f.uid)).length : 0;
+  cont.innerHTML = `
+    <div class="lp-resumen">SENCE abierta: <strong>${enSence}</strong>/${lista.length}${_lp.sala.size ? ` · En sala: <strong>${lista.filter(f => _lp.sala.has(normTxt(f.nombre))).length}</strong>` : ''}${_lp.llamadoId ? ` · ✋ Presentes: <strong>${presentes}</strong>/${llamados.length}` : ''}</div>
+    <div class="lp-acciones">
+      <button class="pri" onclick="iniciarLlamado()">✋ Pasar lista (todos)</button>
+      <button onclick="silenciarTodos()" title="Silencia los micrófonos de todos">🔇 Silenciar a todos</button>
+    </div>
+    <div class="lp-lista" style="max-height:60vh">${lista.map(f => {
+      const a = porUid.get(f.uid), abierta = a?.sessionOpen === true, ps = _lp.pases.get(f.uid), enSala = _lp.sala.has(normTxt(f.nombre));
+      const dot = abierta ? 'lp-on' : (a ? 'lp-warn' : 'lp-off');
+      const tit = abierta ? 'Sesión SENCE abierta' : a ? 'Sesión SENCE cerrada' : 'Aún no ingresa';
+      const tags = [enSala ? '📹' : '', ps ? `✅${ps.camara ? '🎥' : ''}${ps.microfono ? '🎤' : ''}` : ''].filter(Boolean).join(' ');
+      return `<div class="lp-row"><span class="lp-dot ${dot}" title="${tit}">●</span><span class="lp-name" title="${escHtml(f.nombre)} — ${tit}">${escHtml(f.nombre)}</span><span class="lp-tags">${tags}</span><button class="lp-b" title="Pedirle presente con cámara y micrófono" onclick="iniciarLlamado('${escHtml(f.uid)}')">✋</button></div>`;
+    }).join('')}</div>
+    <div class="lp-resumen" style="margin-top:6px">● verde: SENCE abierta · ámbar: cerrada · gris: no ha ingresado · 📹 en la sala</div>`;
+}
+async function iniciarLlamado(uid) {
+  if (!_lp) return;
+  if (!uid && !confirm('¿Pasar lista a TODOS? Les aparecerá un aviso para confirmar presencia y activar cámara y micrófono.')) return;
+  try {
+    await db.collection('liveClasses').doc(_lp.classId).update({ llamado: { id: String(Date.now()), at: firebase.firestore.FieldValue.serverTimestamp(), uids: uid ? [uid] : [], por: currentUser.uid }, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    toast(uid ? '✋ Aviso enviado al alumno.' : '✋ Lista iniciada: los alumnos están confirmando.', 'success', 4000);
+  } catch (e) { toast('❌ ' + e.message, 'error', 6000); }
+}
+function silenciarTodos() {
+  if (!_jitsiApi) return toast('La sala de video no está activa.', 'warning');
+  try { _jitsiApi.executeCommand('muteEveryone'); toast('🔇 Micrófonos silenciados.', 'success', 3000); } catch (e) { toast('No se pudo silenciar: ' + e.message, 'error'); }
 }
 
 function recargarAlumnosRTDB(classId) {
