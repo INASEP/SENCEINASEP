@@ -647,6 +647,11 @@ iframe.video-frame { width:100%; height:100%; min-height:500px; border:none; }
   .topbar { padding: 0 12px; }
   .page-header h2 { font-size: 17px; }
 }
+
+.ramo-ahora{display:flex;gap:12px;align-items:center;background:var(--green-50,#eef7f1);border-left:6px solid #F2D01A;border-radius:10px;padding:10px 14px;margin:0 0 12px}
+.ramo-ahora .ramo-ico{font-size:28px}.ramo-et{font-size:11.5px;letter-spacing:.5px;font-weight:700;color:var(--text-mid)}
+.ramo-nom{font-size:19px;font-weight:800;line-height:1.25}.ramo-sub{font-size:13px;color:var(--text-mid)}
+.video-room .ramo-ahora{margin:0}
 </style>
 </head>
 <body>
@@ -1113,7 +1118,7 @@ function navigate(view, params={}) {
     if (_teacherRTListener) { _teacherRTListener(); _teacherRTListener = null; }
   }
   if (_jitsiApi) { try { _jitsiApi.dispose(); } catch (e) {} _jitsiApi = null; }
-  _detenerVigilanciaSesion();
+  _detenerVigilanciaSesion(); _detenerRelojRamo();
   if (_claseListener) { _claseListener(); _claseListener = null; }
   if (_avisoCierreTimer) { clearInterval(_avisoCierreTimer); _avisoCierreTimer = null; }
   if (_chatListener) { _chatListener(); _chatListener = null; }
@@ -1344,6 +1349,7 @@ async function renderLiveClasses(mc) {
             ${statusBadge}
           </div>
           <div class="live-class-body">
+            ${!isPast && c.scheduledAt ? _ramoHost(c) : ''}
             <div class="live-class-meta">
               <span>📅 ${fmtDateTime(c.scheduledAt)}</span>
               <span>⏱ ${c.duration || 60} min</span>
@@ -1680,8 +1686,11 @@ async function renderClassRoom(mc, params={}) {
 
   // Construir URL del video
   let videoEmbed = '';
-  const _esJitsi = cls.videoType === 'jitsi' && cls.jitsiRoom;
-  if (_esJitsi) {
+  const _presencial = cls.modalidadBloque === 'presencial';
+  const _esJitsi = cls.videoType === 'jitsi' && cls.jitsiRoom && !_presencial;
+  if (_presencial) {
+    videoEmbed = `<div class="video-placeholder"><div class="icon">🏫</div><p><strong>Esta clase es presencial.</strong><br>Asiste a la sala de clases. Aquí solo registras tu asistencia SENCE.</p></div>`;
+  } else if (_esJitsi) {
     videoEmbed = `<div id="jitsiHost" class="jitsi-host"><div class="video-placeholder"><div class="icon">📡</div><p>Conectando a la sala...</p></div></div>`;
   } else if (cls.videoType === 'jitsi') {
     // Jitsi propio: NUNCA se arma un iframe directo desde datos del navegador (saltaría la autorización del Worker/JWT).
@@ -1788,6 +1797,7 @@ async function renderClassRoom(mc, params={}) {
 
     <!-- VIDEO -->
     <div class="card" style="padding:0;overflow:hidden">
+      ${_ramoHost(cls)}
       <div class="video-room" id="videoRoom">
         ${videoEmbed}
       </div>
@@ -1820,7 +1830,8 @@ async function renderClassRoom(mc, params={}) {
     </div>` : ''}`;
 
   initClassChat(classId);
-  if (cls.videoType === 'jitsi' && cls.jitsiRoom) montarVideoJitsi('jitsiHost', classId, cls);
+  if (cls.videoType === 'jitsi' && cls.jitsiRoom && cls.modalidadBloque !== 'presencial') montarVideoJitsi('jitsiHost', classId, cls);
+  iniciarRelojRamo(cls);
   if (currentRole === 'student') escucharEstadoClase(classId, cls.status, sessionOpen ? att.id : '');
 
   // Cronómetro si sesión abierta
@@ -2760,28 +2771,38 @@ async function renderMyCourses(mc) {
     const cont = document.getElementById('myCoursesContainer');
     if (snap.empty) { cont.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>No hay clases disponibles por ahora.</p></div>'; return; }
 
-    cont.innerHTML = snap.docs.map(doc => {
+    // UN solo acceso por curso: el bloque en curso o, si no hay, el próximo. El ramo que se dicta se ve antes de entrar.
+    const grupos = new Map();
+    snap.docs.sort((a, b) => (a.data().scheduledAt?.toMillis?.() || 0) - (b.data().scheduledAt?.toMillis?.() || 0)).forEach(d => {
+      const c = d.data(), k = c.cursoId || c.courseName || d.id;
+      const g = grupos.get(k) || { items: [] }; g.items.push(d); grupos.set(k, g);
+    });
+    cont.innerHTML = [...grupos.values()].map(g => {
+      const doc = g.items.find(d => d.data().status === 'active') || g.items[0];
+      const otros = g.items.length - 1;
       const c = doc.data();
       const isLive = c.status === 'active';
       return `
         <div class="live-class-card">
           <div class="live-class-header">
-            <h4>${escHtml(c.title)}</h4>
+            <h4>${escHtml(c.courseName || c.title)}</h4>
             ${isLive ? '<span class="badge badge-live">🔴 EN VIVO AHORA</span>' : '<span class="badge badge-blue">📅 Programada</span>'}
           </div>
           <div class="live-class-body">
+            ${_ramoHost(c)}
             <div class="live-class-meta">
               <span>📅 ${fmtDateTime(c.scheduledAt)}</span>
               <span>⏱ ${c.duration||60} min</span>
-              <span>🎓 ${escHtml(c.courseName||'—')}</span>
+              <span>${escHtml(String(c.title || '').split('—').pop().trim())}</span>
             </div>
-            ${c.description ? `<p style="font-size:13px;color:var(--text-mid);margin-bottom:12px">${escHtml(c.description)}</p>` : ''}
             <div class="live-class-actions">
               <button class="btn ${isLive?'btn-live':'btn-primary'}" onclick="navigate('class-room',{id:'${doc.id}'})">
-                ${isLive ? '🔴 Entrar a Clase EN VIVO' : '👁️ Ver Clase'}
+                ${isLive ? '🔴 Entrar a mi clase' : '👁️ Ver mi clase'}
               </button>
+              ${c.cursoId ? `<button class="btn btn-secondary" onclick="verHorarioCurso('${escHtml(c.cursoId)}')">📅 Horario del curso</button>` : ''}
             </div>
             ${isLive ? `<p style="font-size:12px;color:var(--warning);margin-top:8px">⚠️ Recuerda iniciar tu sesión SENCE con ClaveÚnica al entrar.</p>` : ''}
+            ${otros > 0 ? `<p style="font-size:12px;color:var(--text-light);margin-top:6px">Hay ${otros} bloque(s) más programados de este curso.</p>` : ''}
           </div>
         </div>`;
     }).join('');
@@ -3878,7 +3899,7 @@ async function montarVideoJitsi(hostId, classId, cls) {
     _jitsiApi = new JitsiMeetExternalAPI(j.domain, {
       roomName: j.room, ...(j.jwt ? { jwt: j.jwt } : {}), parentNode: host, width: '100%', height: '100%',
       userInfo: { displayName: currentUser.displayName || '' },
-      configOverwrite: { prejoinConfig: { enabled: false }, disableDeepLinking: true }
+      configOverwrite: { prejoinConfig: { enabled: false }, disableDeepLinking: true, subject: textoRamo(cls) || (cls.courseName || '') }
     });
   } catch (e) { msg('⚠️', e.message); }
 }
@@ -4019,14 +4040,19 @@ async function renderImportClasses(mc, params = {}) {
           <small>Solo se usa en los días donde el Excel no trae una fila "Almuerzo".</small></div>
       </div>
       <div class="form-row">
+        <div class="form-group"><label>Duración de la "hora" en el Excel (columnas Teóricas / Prácticas)</label>
+          <select id="im_minHora"><option value="60" selected>60 min — hora cronológica (la que usa SENCE)</option><option value="45">45 min — hora pedagógica</option></select>
+          <small>Se usa para repartir una fila que trae parte teórica y parte práctica, y para contar las horas de cada ramo.</small></div>
+      </div>
+      <div class="form-row">
         <div class="form-group"><label>Videoconferencia</label>
           <select id="im_videoType" onchange="document.getElementById('im_videoUrlBox').style.display = this.value==='jitsi' ? 'none' : 'block'">
-            <option value="jitsi">🟢 Jitsi INASEP (una sala por día, automática)</option>
+            <option value="jitsi">🟢 Jitsi INASEP (una sala fija por curso, automática)</option>
             <option value="meet">📱 Google Meet (mismo enlace para todas)</option>
             <option value="zoom">💙 Zoom (mismo enlace para todas)</option>
             <option value="teams">🟦 Microsoft Teams (mismo enlace para todas)</option>
             <option value="custom">🔗 URL personalizada (mismo enlace para todas)</option>
-          </select><small>Una sola sala por día y curso: los profesores se relevan en el mismo enlace y el almuerzo no la cierra.</small></div>
+          </select><small>Una sola sala fija por curso (curso-nombre-día-mes-año del primer día): los relatores se relevan en ella y el nombre del ramo en curso cambia solo según el horario.</small></div>
       </div>
       <div class="form-group" id="im_videoUrlBox" style="display:none"><label>URL de la videoconferencia *</label>
         <input type="url" id="im_videoUrl" placeholder="https://..."></div>
@@ -4035,7 +4061,7 @@ async function renderImportClasses(mc, params = {}) {
     <div class="card">
       <div class="card-header"><h3>2️⃣ Archivo Excel (.xlsx) o CSV</h3></div>
       <p style="font-size:13px;color:var(--text-mid);margin-bottom:10px">
-        Columnas: <strong>Fecha · Horario clases · Asignatura · Nombre del capacitador</strong> (opcional: <em>Código módulo</em>).
+        Columnas: <strong>Fecha · Horario Clases · Asignaturas · Teóricas · Prácticas · Relator Asignado</strong> (opcional: <em>Código módulo</em>). Las horas son las del curso (por defecto cronológicas, 60 min; se puede cambiar abajo): las <strong>teóricas</strong> se dictan por video y las <strong>prácticas</strong> son presenciales, pero ambas se registran con sesión SENCE en el portal (una fila puede traer ambas: primero la teórica y después la práctica; si necesitas otro orden, sepáralas en dos filas). El formato anterior (sin horas) también funciona.
         Horario con formato <code>09:15 a 17:30</code>. Cada fila es un tramo; el programa los agrupa en <strong>bloques SENCE</strong> (mañana / tarde).
         Para marcar el almuerzo agrega una fila con la asignatura <code>Almuerzo</code> (o Colación / Receso) y su horario; también se corta solo si hay un hueco de 30 min o más.</p>
       <input type="file" id="im_file" accept=".xlsx,.xls,.csv">
@@ -4058,13 +4084,14 @@ async function renderImportClasses(mc, params = {}) {
 
 function descargarPlantillaClases() {
   const aoa = [
-    ['Fecha', 'Horario clases', 'Asignatura', 'Nombre del capacitador', 'Código módulo (solo línea 1)'],
-    ['23-11-2026', '09:15 a 13:00', 'Ejemplo: Legislación aplicada', 'Nombre Apellido Apellido', ''],
-    ['23-11-2026', '13:00 a 14:00', 'Almuerzo', '', ''],
-    ['23-11-2026', '14:00 a 17:30', 'Ejemplo: Seguridad de las instalaciones', 'Nombre Apellido Apellido', ''],
+    ['Fecha', 'Horario Clases', 'Asignaturas', 'Teóricas', 'Prácticas', 'Relator Asignado'],
+    ['23-11-2026', '09:00 a 11:00', 'Ejemplo: Legislación aplicada a la Seguridad Privada', 2, '', 'Nombre Apellido Apellido'],
+    ['23-11-2026', '11:00 a 13:00', 'Ejemplo: Legislación aplicada a la Seguridad Privada', 2, '', 'Nombre Apellido Apellido'],
+    ['26-11-2026', '15:00 a 18:00', 'Ejemplo: Primeros Auxilios (2 h teóricas + 1 h práctica)', 2, 1, 'Nombre Apellido Apellido'],
+    ['27-11-2026', '09:00 a 11:00', 'Ejemplo: Instrucción Física (solo práctica)', '', 2, 'Nombre Apellido Apellido'],
   ];
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{ wch: 12 }, { wch: 16 }, { wch: 48 }, { wch: 34 }, { wch: 26 }];
+  ws['!cols'] = [{ wch: 12 }, { wch: 16 }, { wch: 56 }, { wch: 10 }, { wch: 10 }, { wch: 34 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Programacion');
   XLSX.writeFile(wb, 'plantilla_programacion_clases.xlsx');
@@ -4105,6 +4132,14 @@ function matchProfesor(nombre, profs) {
   return cand.length === 1 ? cand[0] : null;
 }
 
+const MIN_HORA = 60;   // SENCE: horas CRONOLÓGICAS (60 min). El importador permite indicar otra duración (p. ej. 45) si el Excel la usa.
+const MESES_ES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+/* Sala Jitsi FIJA del curso: curso-<nombre>-<día>-<mes>-<año> del primer día del curso. No cambia durante todo el curso. */
+function salaDelCurso(cursoId, f) {
+  const base = String(cursoId || '').replace(/^curso-/, '');
+  const suf = `-${f.d}-${MESES_ES[f.m - 1]}-${f.y}`;
+  return ('curso-' + base).slice(0, 100 - suf.length).replace(/-+$/, '') + suf;
+}
 const GAP_CORTE = 30; // minutos: un hueco o pausa de 30 min o más separa un bloque de otro (almuerzo)
 const RE_BREAK = /^(almuerzo|colacion|break|receso|descanso|pausa)\b/;
 const _mm = (h, n) => h * 60 + n;
@@ -4120,13 +4155,16 @@ function construirBloques(rows, almDef) {
     if (!porDia.has(r.day)) porDia.set(r.day, []);
     porDia.get(r.day).push(r);
   });
-  const out = [];
+  const out = []; out.presenciales = [];
   [...porDia.keys()].sort().forEach(day => {
     const rs = porDia.get(day);
     const f = rs[0].f;
+    // SENCE: el curso es solo "en línea": las horas prácticas (presenciales) también se registran con sesión SENCE desde esta plataforma.
+    // Por eso la práctica va DENTRO del bloque (no lo corta); solo el almuerzo / huecos de 30 min o más separan bloques.
     let breaks = rs.filter(r => r.esBreak && (r.b - r.a) >= GAP_CORTE).map(r => ({ a: r.a, b: r.b }));
     const cortos = rs.filter(r => r.esBreak && (r.b - r.a) < GAP_CORTE).length;
     const segsIn = rs.filter(r => !r.esBreak).sort((x, y) => x.a - y.a);
+    const jornada = rs.filter(r => !r.esBreak).sort((x, y) => x.a - y.a).map(r => ({ a: r.a, b: r.b, asig: r.asig, cap: r.cap, capUid: r.capUid, tipo: r.esPractica ? 'practica' : 'teorica', horas: r.horas || 0 }));
     if (!segsIn.length) return;
     const minA = Math.min(...segsIn.map(s => s.a)), maxB = Math.max(...segsIn.map(s => s.b));
     let usoAlmDef = false;
@@ -4135,7 +4173,7 @@ function construirBloques(rows, almDef) {
     if (!breaks.length && !hayHueco && almDef && minA < almDef.a && maxB > almDef.b) {
       breaks = [{ a: almDef.a, b: almDef.b }]; usoAlmDef = true;
     }
-    let piezas = segsIn.map(s => ({ a: s.a, b: s.b, asig: s.asig, cap: s.cap, capUid: s.capUid, av: s.avisos, codMod: s.codMod, fila: s.fila, dividido: false }));
+    let piezas = segsIn.map(s => ({ a: s.a, b: s.b, asig: s.asig, cap: s.cap, capUid: s.capUid, av: s.avisos, codMod: s.codMod, fila: s.fila, horas: s.horas, tipo: s.tipo || 'teorica', dividido: false }));
     breaks.sort((x, y) => x.a - y.a).forEach(br => {
       const np = [];
       piezas.forEach(p => {
@@ -4169,7 +4207,7 @@ function construirBloques(rows, almDef) {
       if (usoAlmDef) avisos.push('Almuerzo aplicado por defecto');
       if (g.segs.some(p => p.dividido)) avisos.push('Una asignatura se dividió por el almuerzo');
       if (start < new Date(new Date().setHours(0, 0, 0, 0))) avisos.push('Fecha pasada');
-      out.push({ day, start, a: g.a, b: g.b, dur, net, franja, segs: g.segs, avisos, dup: false,
+      out.push({ day, start, a: g.a, b: g.b, dur, net, franja, segs: g.segs, jornada, soloPresencial: g.segs.every(p => p.tipo === 'practica'), avisos, dup: false,
         title: `${franja} — ${asigs.join(' / ')}`.slice(0, 150) });
     });
   });
@@ -4185,6 +4223,7 @@ async function previsualizarImportacion() {
   const videoType = document.getElementById('im_videoType').value;
   const videoUrl = document.getElementById('im_videoUrl').value.trim();
   const almTxt = (document.getElementById('im_almuerzo')?.value || '').trim();
+  const minHora = parseInt(document.getElementById('im_minHora')?.value) || MIN_HORA;
   const file = document.getElementById('im_file').files[0];
   const box = document.getElementById('im_preview');
 
@@ -4213,11 +4252,13 @@ async function previsualizarImportacion() {
 
   const hi = aoa.findIndex(r => r.some(c => normTxt(c) === 'fecha'));
   if (hi < 0) { box.innerHTML = ''; return toast('❌ No encontré la columna "Fecha" en el archivo.', 'error', 6000); }
-  const col = { fecha: -1, horario: -1, asig: -1, cap: -1, mod: -1 };
+  const col = { fecha: -1, horario: -1, asig: -1, cap: -1, mod: -1, teo: -1, pra: -1 };
   aoa[hi].forEach((h, i) => {
     const t = normTxt(h);
     if (t.includes('codigo') && t.includes('modulo')) col.mod = i;
     else if (t.includes('fecha')) col.fecha = i;
+    else if (t.includes('teorica')) col.teo = i;
+    else if (t.includes('practica')) col.pra = i;
     else if (t.includes('horario') || t === 'hora') col.horario = i;
     else if (t.includes('asignatura') || t.includes('materia') || t.includes('modulo')) col.asig = i;
     else if (t.includes('capacitador') || t.includes('profesor') || t.includes('docente') || t.includes('relator')) col.cap = i;
@@ -4262,21 +4303,56 @@ async function previsualizarImportacion() {
     }
     if (!esBreak && linea === 1 && !codMod) errores.push('Falta código de módulo SIC');
     if (!esBreak && !cap) avisos.push('Sin capacitador');
-    rows.push({ fila, f, h, start, asig, cap, capUid, codMod, errores, avisos, esBreak,
-      day: f ? _ymd(f) : '', a: h ? _mm(h.h1, h.n1) : 0, b: h ? _mm(h.h2, h.n2) : 0 });
+    const base = { fila, f, asig, cap, capUid, codMod, esBreak, day: f ? _ymd(f) : '' };
+    const num = v => { const n = parseFloat(String(v).replace(',', '.')); return isFinite(n) && n > 0 ? n : 0; };
+    const conHoras = col.teo >= 0 || col.pra >= 0;
+    let teo = conHoras && !esBreak ? num(r[col.teo]) : 0, pra = conHoras && !esBreak ? num(r[col.pra]) : 0;
+    if (conHoras && !esBreak && h && h.dur > 0) {
+      if (!teo && !pra) avisos.push('Sin horas teóricas ni prácticas: se tomó como teórica (en línea)');
+      else if (Math.abs((teo + pra) * minHora - h.dur) > 1) avisos.push(`${teo + pra} h × ${minHora} min = ${Math.round((teo + pra) * minHora)} min, pero el horario dura ${h.dur} min (se reparte en proporción)`);
+    }
+    const piezas = [];   // una fila puede traer una parte teórica (en línea) y una práctica (presencial): teórica primero
+    if (h && h.dur > 0 && start && !errores.length && !esBreak && conHoras && pra > 0) {
+      const a0 = _mm(h.h1, h.n1), b0 = _mm(h.h2, h.n2);
+      // si las horas calzan con el horario, el corte es exacto; si no, se reparte en proporción (a múltiplos de 5 min)
+      const exacto = Math.abs((teo + pra) * minHora - h.dur) <= 1;
+      const tMin = exacto ? Math.round(teo * minHora) : Math.round((h.dur * teo / (teo + pra)) / 5) * 5;
+      const corte = teo > 0 ? Math.min(b0, a0 + tMin) : a0;
+      if (corte > a0) piezas.push({ a: a0, b: corte, tipo: 'teorica', horas: teo });
+      if (b0 > corte) piezas.push({ a: corte, b: b0, tipo: 'practica', horas: pra });
+    } else if (h && !esBreak) piezas.push({ a: _mm(h.h1, h.n1), b: _mm(h.h2, h.n2), tipo: 'teorica', horas: teo || (h.dur / minHora) });
+    if (!piezas.length || esBreak || errores.length || !h || !start) {
+      rows.push({ ...base, h, start, errores, avisos, tipo: 'teorica', horas: 0, a: h ? _mm(h.h1, h.n1) : 0, b: h ? _mm(h.h2, h.n2) : 0 });
+    } else piezas.forEach((p, k) => {
+      const hh = { h1: Math.floor(p.a / 60), n1: p.a % 60, h2: Math.floor(p.b / 60), n2: p.b % 60, dur: p.b - p.a };
+      rows.push({ ...base, h: hh, start: new Date(f.y, f.m - 1, f.d, hh.h1, hh.n1), errores, avisos: k ? [] : avisos, esPractica: p.tipo === 'practica', tipo: p.tipo, horas: p.horas, a: p.a, b: p.b });
+    });
   }
   const bloques = construirBloques(rows, almDef);
   bloques.forEach(b => { b.dup = existentes.has(b.start.getTime()); });
+  // Sala Jitsi fija del curso: si el curso ya tiene una sala única se reutiliza; si no, curso-<nombre>-<día>-<mes>-<año> del primer día
+  const salasPrevias = [...new Set(exSnap.docs.map(d => d.data().jitsiRoom).filter(Boolean))];
+  const fechasOk = rows.filter(r => r.f && !r.errores.length).map(r => r.day).sort();
+  const f0 = fechasOk.length ? _fechaDeCelda(fechasOk[0]) : null;
+  const sala = videoType !== 'jitsi' ? '' : salasPrevias.length === 1 ? salasPrevias[0] : (f0 ? salaDelCurso(cursoId, f0) : '');
+  const hayHoras = col.teo >= 0 || col.pra >= 0;
+  // resumen por ramo (horas de 45 min)
+  const resumen = new Map();
+  rows.filter(r => !r.esBreak && !r.errores.length && r.asig).forEach(r => {
+    const k = normTxt(r.asig); if (!resumen.has(k)) resumen.set(k, { asig: r.asig, teo: 0, pra: 0, caps: new Set() });
+    const x = resumen.get(k); (r.esPractica ? (x.pra += r.horas || 0) : (x.teo += r.horas || 0)); if (r.cap) x.caps.add(r.cap);
+  });
 
   const mapa = {};
-  bloques.forEach(b => b.segs.forEach(p => { if (p.cap && !(p.cap in mapa)) mapa[p.cap] = p.capUid || matchProfesor(p.cap, profs)?.uid || ''; }));
-  _imp = { rows, bloques, profs, mapa, curso, cursoId, linea, codSence, codigoCurso, videoType, videoUrl };
+  rows.forEach(r => { if (!r.esBreak && !r.errores.length && r.cap && !(r.cap in mapa)) mapa[r.cap] = r.capUid || matchProfesor(r.cap, profs)?.uid || ''; });
+  _imp = { rows, bloques, profs, mapa, curso, cursoId, linea, codSence, codigoCurso, videoType, videoUrl, sala, minHora, hayHoras, resumen: [...resumen.values()], presenciales: bloques.presenciales || [] };
   renderPreviewImportacion();
 }
 
 function renderPreviewImportacion() {
   const { rows, bloques, profs, mapa } = _imp;
   const box = document.getElementById('im_preview');
+  const fmtH = n => String(Math.round(n * 10) / 10).replace('.', ',');
   const nuevos = bloques.filter(b => !b.dup);
   const filasError = rows.filter(r => r.errores.length);
   const nDup = bloques.filter(b => b.dup).length;
@@ -4298,6 +4374,25 @@ function renderPreviewImportacion() {
     </div>` : '';
 
   const fechaTxt = b => `${_p2(b.start.getDate())}-${_p2(b.start.getMonth() + 1)}-${b.start.getFullYear()}`;
+  const resumenHtml = _imp.hayHoras && _imp.resumen.length ? `
+    <div class="card">
+      <div class="card-header"><h3>📊 Horas por ramo (1 hora = ${_imp.minHora} min)</h3></div>
+      <p style="font-size:12.5px;color:var(--text-mid);margin-bottom:10px">Las horas <strong>teóricas</strong> se dictan por videoconferencia. Las <strong>prácticas</strong> son presenciales, pero <strong>también se registran con sesión SENCE desde esta plataforma</strong> (SENCE solo reconoce cursos en línea o presenciales, no mixtos). Compara con tu carga horaria.</p>
+      <div class="table-wrap"><table><thead><tr><th>Ramo</th><th>Teóricas</th><th>Prácticas</th><th>Total</th><th>Relator(es)</th></tr></thead><tbody>
+        ${_imp.resumen.map(x => `<tr><td>${escHtml(x.asig)}</td><td>${fmtH(x.teo)}</td><td>${fmtH(x.pra)}</td><td><strong>${fmtH(x.teo + x.pra)}</strong></td><td style="font-size:12.5px">${escHtml([...x.caps].join(', ') || '—')}</td></tr>`).join('')}
+        <tr style="font-weight:700"><td>TOTAL</td><td>${fmtH(_imp.resumen.reduce((s, x) => s + x.teo, 0))}</td><td>${fmtH(_imp.resumen.reduce((s, x) => s + x.pra, 0))}</td><td>${fmtH(_imp.resumen.reduce((s, x) => s + x.teo + x.pra, 0))}</td><td></td></tr>
+      </tbody></table></div></div>` : '';
+  const prac = [];
+  bloques.forEach(b => (b.jornada || []).filter(j => j.tipo === 'practica').forEach(j => prac.push({ day: b.day, ...j })));
+  (_imp.presenciales || []).forEach(d => d.jornada.forEach(j => prac.push({ day: d.day, ...j })));
+  const pracUnicas = [...new Map(prac.map(p => [p.day + p.a, p])).values()].sort((x, y) => (x.day + String(x.a).padStart(4, '0')).localeCompare(y.day + String(y.a).padStart(4, '0')));
+  const presHtml = pracUnicas.length ? `
+    <div class="card">
+      <div class="card-header"><h3>🏫 Prácticas presenciales (dentro de los bloques)</h3></div>
+      <p style="font-size:12.5px;color:var(--text-mid);margin-bottom:10px">El alumno las vive en la sala de clases, pero marca su sesión SENCE en el portal como en cualquier bloque. Los bloques solo con práctica no cargan videoconferencia.</p>
+      <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Horario</th><th>Ramo</th><th>Horas</th><th>Relator</th></tr></thead><tbody>
+        ${pracUnicas.map(p => `<tr><td>${escHtml(p.day.split('-').reverse().join('-'))}</td><td style="font-family:'DM Mono';white-space:nowrap">${_hhmm(p.a)}–${_hhmm(p.b)}</td><td>${escHtml(p.asig)}</td><td>${fmtH(p.horas)}</td><td style="font-size:12.5px">${escHtml(p.cap || '—')}</td></tr>`).join('')}
+      </tbody></table></div></div>` : '';
   box.innerHTML = `
     <div class="card">
       <div class="card-header"><h3>🔍 Previsualización — ${escHtml(_imp.curso)}</h3></div>
@@ -4307,7 +4402,8 @@ function renderPreviewImportacion() {
         <span style="color:var(--danger)"><strong>${filasError.length}</strong> filas con error</span> ·
         <span style="color:var(--text-light)"><strong>${nDup}</strong> bloques ya existen</span>
       </div>
-      <p style="font-size:12.5px;color:var(--text-mid);margin-bottom:10px">Cada <strong>bloque</strong> es una sesión SENCE del alumno (mañana o tarde): el alumno inicia y cierra una vez por bloque. Dentro del bloque, cada asignatura es un tramo con su profesor.</p>
+      <p style="font-size:12.5px;color:var(--text-mid);margin-bottom:10px">Cada <strong>bloque</strong> es una sesión SENCE del alumno (una tanda continua de clases, en línea o presenciales): el alumno inicia y cierra una vez por bloque. Dentro del bloque, cada ramo es un tramo con su relator y el nombre del ramo cambia solo según el horario.</p>
+      ${_imp.sala ? `<div class="caja-sala" style="background:var(--green-50);border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:13px">📹 Sala fija del curso en Jitsi: <strong style="font-family:'DM Mono'">${escHtml(_imp.sala)}</strong> — la misma durante todo el curso.</div>` : ''}
       <div class="table-wrap"><table>
         <thead><tr><th>Fecha</th><th>Bloque</th><th>Horario</th><th>Tramos (asignatura · profesor)</th><th>Estado</th></tr></thead>
         <tbody>${bloques.map(b => `<tr>
@@ -4323,6 +4419,8 @@ function renderPreviewImportacion() {
       <div class="table-wrap"><table><thead><tr><th>Fila</th><th>Asignatura</th><th>Problema</th></tr></thead><tbody>
         ${filasError.map(r => `<tr><td>${r.fila}</td><td>${escHtml(r.asig)}</td><td>${escHtml(r.errores.join('; '))}</td></tr>`).join('')}
       </tbody></table></div></div>` : ''}
+    ${resumenHtml}
+    ${presHtml}
     ${mapaHtml}
     <div class="card">
       <button class="btn btn-success" id="btnImportar" ${nuevos.length ? '' : 'disabled'} onclick="ejecutarImportacion()">✅ Crear ${nuevos.length} bloques</button>
@@ -4331,9 +4429,10 @@ function renderPreviewImportacion() {
 }
 
 async function ejecutarImportacion() {
-  const { bloques, profs, mapa, curso, cursoId, linea, codSence, codigoCurso, videoType, videoUrl } = _imp;
+  const { bloques, profs, mapa, curso, cursoId, linea, codSence, codigoCurso, videoType, videoUrl, sala } = _imp;
   const lista = bloques.filter(b => !b.dup);
   if (!lista.length) return;
+  if (videoType === 'jitsi' && !sala) return toast('⚠️ No se pudo determinar la sala del curso (revisa las fechas).', 'warning');
   if (!confirm(`¿Crear ${lista.length} bloques del curso "${curso}"?`)) return;
   const btn = document.getElementById('btnImportar'); btn.disabled = true; btn.textContent = 'Creando...';
   const lote = 'imp-' + Date.now();
@@ -4343,14 +4442,15 @@ async function ejecutarImportacion() {
       lista.slice(i, i + 400).forEach(b => {
         const segmentos = b.segs.map(p => {
           const prof = profs.find(x => x.uid === mapa[p.cap]);
-          return { titulo: p.asig, ini: _hhmm(p.a), fin: _hhmm(p.b), durMin: p.b - p.a, profesorUid: prof?.uid || '', profesorNombre: prof?.name || p.cap || '', codModulo: p.codMod || '' };
+          return { titulo: p.asig, ini: _hhmm(p.a), fin: _hhmm(p.b), durMin: p.b - p.a, tipo: p.tipo || 'teorica', horas: p.horas || 0, profesorUid: prof?.uid || '', profesorNombre: prof?.name || p.cap || '', codModulo: p.codMod || '' };
         });
         const uids = [...new Set(segmentos.map(s => s.profesorUid).filter(Boolean))];
         const nombres = [...new Set(segmentos.map(s => s.profesorNombre).filter(Boolean))];
-        // UNA sala por día y curso: mañana y tarde usan el mismo enlace; los relevos de profesor no cierran la sala
-        const room = `inasep-${cursoId}-${b.start.getFullYear()}${_p2(b.start.getMonth() + 1)}${_p2(b.start.getDate())}`.slice(0, 80);
+        // Sala FIJA del curso (curso-<nombre>-<día>-<mes>-<año>): igual para todos los bloques y días; los relevos no la cierran
+        const room = sala;
+        const jornada = (b.jornada || []).map(j => { const pr = profs.find(x => x.uid === mapa[j.cap]); return { ini: _hhmm(j.a), fin: _hhmm(j.b), titulo: j.asig, tipo: j.tipo, horas: j.horas || 0, profesorUid: pr?.uid || '', profesorNombre: pr?.name || j.cap || '' }; });
         batch.set(db.collection('liveClasses').doc(), {
-          title: b.title, courseName: curso, cursoId,
+          title: `${curso} — ${b.franja}`.slice(0, 150), courseName: curso, cursoId, jornada,
           description: segmentos.map(s => `${s.ini}-${s.fin} ${s.titulo}${s.profesorNombre ? ' (' + s.profesorNombre + ')' : ''}`).join(' | ').slice(0, 900),
           scheduledAt: firebase.firestore.Timestamp.fromDate(b.start),
           duration: b.dur, duracionNeta: b.net, segmentos,
@@ -4358,6 +4458,8 @@ async function ejecutarImportacion() {
           status: 'scheduled', videoType,
           videoUrl: videoType === 'jitsi' ? '' : videoUrl,
           jitsiRoom: videoType === 'jitsi' ? room : '',
+          minHora: _imp.minHora,
+          modalidadBloque: b.soloPresencial ? 'presencial' : (b.segs.some(p => p.tipo === 'practica') ? 'mixto' : 'en_linea'),
           capacidadEstimada: 0,
           profesoresUids: uids, profesorUid: uids[0] || '', profesorNombre: nombres.join(', '),
           importLote: lote,
@@ -4368,6 +4470,17 @@ async function ejecutarImportacion() {
       });
       await batch.commit();
     }
+    // Horario completo del curso (teóricas en línea + prácticas presenciales) para que lo vean alumno, profesor y admin
+    try {
+      const ids = new Set(); const tramos = [];
+      const addDia = (day, jor) => { ids.add(day); jor.forEach(j => { const pr = profs.find(x => x.uid === mapa[j.cap]); tramos.push({ dia: day, ini: _hhmm(j.a), fin: _hhmm(j.b), titulo: j.asig, tipo: j.tipo, horas: j.horas || 0, profesorNombre: pr?.name || j.cap || '' }); }); };
+      const vistos = new Set();
+      bloques.forEach(b => { if (!vistos.has(b.day)) { vistos.add(b.day); addDia(b.day, b.jornada || []); } });
+      (_imp.presenciales || []).forEach(d => { if (!vistos.has(d.day)) { vistos.add(d.day); addDia(d.day, d.jornada); } });
+      const pRef = db.collection('programacion').doc(cursoId); const prev = await pRef.get();
+      const antes = (prev.exists ? prev.data().tramos || [] : []).filter(t => !ids.has(t.dia));
+      await pRef.set({ cursoId, courseName: curso, sala: sala || '', minHora: _imp.minHora, tramos: [...antes, ...tramos].sort((x, y) => (x.dia + x.ini).localeCompare(y.dia + y.ini)), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    } catch (e) { console.warn('programacion', e.message); }
     toast(`✅ ${lista.length} bloques creados. Ahora matricula a los alumnos del curso.`, 'success', 7000);
     navigate('matriculas');
   } catch (e) {
@@ -4376,19 +4489,75 @@ async function ejecutarImportacion() {
   }
 }
 
-/* Tramos del bloque (agenda) — usado en sala del alumno y del profesor */
+/* ── Ramo en curso: se calcula con la hora de Chile y el horario del día (jornada = teóricas + prácticas) ── */
+function _listaDia(cls) { return (cls.jornada && cls.jornada.length) ? cls.jornada : (cls.segmentos || []); }
+function _horaDe(cls, t) { const b = cls.scheduledAt.toDate(); const [h, m] = String(t).split(':').map(Number); return new Date(b.getFullYear(), b.getMonth(), b.getDate(), h, m); }
+function ramoAhora(cls) {
+  if (!cls || !cls.scheduledAt || !cls.scheduledAt.toDate) return null;
+  const lista = _listaDia(cls), now = new Date();
+  const actual = lista.find(s => now >= _horaDe(cls, s.ini) && now < _horaDe(cls, s.fin)) || null;
+  const siguiente = lista.find(s => _horaDe(cls, s.ini) > now) || null;
+  return { actual, siguiente, hayLista: lista.length > 0 };
+}
+function textoRamo(cls) {   // texto plano (asunto de la sala Jitsi)
+  const r = ramoAhora(cls); if (!r || !r.hayLista) return cls.courseName || '';
+  if (r.actual) return `${r.actual.titulo}${r.actual.profesorNombre ? ' — ' + r.actual.profesorNombre : ''}`;
+  return r.siguiente ? `Próximo: ${r.siguiente.ini} ${r.siguiente.titulo}` : (cls.courseName || '');
+}
+function htmlRamoLinea(cls) {
+  const r = ramoAhora(cls); if (!r || !r.hayLista) return '';
+  let t;
+  if (r.actual && r.actual.tipo === 'practica') t = `<span class="ramo-ico">🏫</span><div><div class="ramo-et">AHORA · PRÁCTICA PRESENCIAL (en la sala de clases)</div><div class="ramo-nom">${escHtml(r.actual.titulo)}</div><div class="ramo-sub">${escHtml(r.actual.ini)}–${escHtml(r.actual.fin)}${r.actual.profesorNombre ? ' · Relator: ' + escHtml(r.actual.profesorNombre) : ''}</div></div>`;
+  else if (r.actual) t = `<span class="ramo-ico">📖</span><div><div class="ramo-et">RAMO EN CURSO</div><div class="ramo-nom">${escHtml(r.actual.titulo)}</div><div class="ramo-sub">${escHtml(r.actual.ini)}–${escHtml(r.actual.fin)}${r.actual.profesorNombre ? ' · Relator: ' + escHtml(r.actual.profesorNombre) : ''}</div></div>`;
+  else if (r.siguiente) t = `<span class="ramo-ico">⏭️</span><div><div class="ramo-et">PRÓXIMO RAMO · ${escHtml(r.siguiente.ini)}</div><div class="ramo-nom">${escHtml(r.siguiente.titulo)}</div><div class="ramo-sub">${r.siguiente.tipo === 'practica' ? 'Práctica presencial' : (r.siguiente.profesorNombre ? 'Relator: ' + escHtml(r.siguiente.profesorNombre) : '')}</div></div>`;
+  else t = `<span class="ramo-ico">✅</span><div><div class="ramo-et">HORARIO DE HOY</div><div class="ramo-nom">Sin más ramos hoy</div></div>`;
+  return `<div class="ramo-ahora">${t}</div>`;
+}
+let _ramoTimer = null, _ramoTexto = '';
+function _detenerRelojRamo() { if (_ramoTimer) { clearInterval(_ramoTimer); _ramoTimer = null; } _ramoTexto = ''; }
+function iniciarRelojRamo(cls) {
+  _detenerRelojRamo(); _ramoTexto = textoRamo(cls);
+  _ramoTimer = setInterval(() => {
+    const els = document.querySelectorAll('.ramo-ahora-host'); if (!els.length) return _detenerRelojRamo();
+    els.forEach(e => { e.innerHTML = htmlRamoLinea(cls); });
+    const t = textoRamo(cls);
+    if (t !== _ramoTexto) {
+      _ramoTexto = t;
+      try { if (_jitsiApi) _jitsiApi.executeCommand('subject', t); } catch (e) {}   // solo el moderador puede cambiarlo; el resto lo ve por el aviso en pantalla
+      toast('📖 ' + t, 'info', 9000);
+    }
+  }, 20000);
+}
+const _ramoHost = cls => `<div class="ramo-ahora-host">${htmlRamoLinea(cls)}</div>`;
+
+/* Horario del bloque (agenda del día): tramos en línea y prácticas presenciales — usado en sala del alumno y del profesor */
 function htmlTramos(cls) {
-  const sg = cls.segmentos;
+  const sg = _listaDia(cls);
   if (!sg || !sg.length || !cls.scheduledAt) return '';
-  const base = cls.scheduledAt.toDate();
   const now = new Date();
-  const toD = t => { const [h, m] = String(t).split(':').map(Number); return new Date(base.getFullYear(), base.getMonth(), base.getDate(), h, m); };
-  return `<div class="card"><div class="card-header"><h3>🗓️ Tramos de este bloque</h3></div>
-    <div class="table-wrap"><table><thead><tr><th>Horario</th><th>Asignatura</th><th>Profesor</th></tr></thead><tbody>
-    ${sg.map(s => { const act = now >= toD(s.ini) && now < toD(s.fin); return `<tr style="${act ? 'background:var(--green-50);font-weight:600' : ''}">
+  return `${_ramoHost(cls)}<div class="card"><div class="card-header"><h3>🗓️ Horario de hoy</h3></div>
+    <div class="table-wrap"><table><thead><tr><th>Horario</th><th>Ramo</th><th>Relator</th></tr></thead><tbody>
+    ${sg.map(s => { const act = now >= _horaDe(cls, s.ini) && now < _horaDe(cls, s.fin); const pr = s.tipo === 'practica'; return `<tr style="${act ? 'background:var(--green-50);font-weight:600' : ''}${pr ? ';color:var(--text-mid)' : ''}">
       <td style="font-family:'DM Mono'">${escHtml(s.ini)}–${escHtml(s.fin)}</td>
-      <td>${escHtml(s.titulo)} ${act ? '<span class="badge badge-live">ahora</span>' : ''}</td><td>${escHtml(s.profesorNombre || '—')}</td></tr>`; }).join('')}
+      <td>${pr ? '🏫 ' : ''}${escHtml(s.titulo)} ${pr ? '<span class="badge badge-gray">práctica presencial</span>' : ''} ${act ? '<span class="badge badge-live">ahora</span>' : ''}</td><td>${escHtml(s.profesorNombre || '—')}</td></tr>`; }).join('')}
     </tbody></table></div></div>`;
+}
+/* Horario completo del curso (alumno / profesor / admin) */
+async function verHorarioCurso(cursoId) {
+  try {
+    const d = await db.collection('programacion').doc(cursoId).get();
+    const p = d.exists ? d.data() : null;
+    const porDia = {}; (p?.tramos || []).forEach(t => { (porDia[t.dia] = porDia[t.dia] || []).push(t); });
+    const dias = Object.keys(porDia).sort();
+    document.getElementById('modalContainer').innerHTML = `
+      <div class="modal-overlay"><div class="modal" style="max-width:680px;max-height:86vh;overflow:auto" role="dialog" aria-label="Horario del curso">
+        <h3>📅 Horario del curso</h3>
+        ${p ? '' : '<p>Este curso aún no tiene horario cargado.</p>'}
+        ${dias.map(dia => `<div style="margin:12px 0"><strong>${escHtml(dia.split('-').reverse().join('-'))}</strong>
+          <table style="width:100%;font-size:13.5px;margin-top:4px"><tbody>${porDia[dia].map(t => `<tr style="${t.tipo === 'practica' ? 'color:var(--text-mid)' : ''}"><td style="font-family:'DM Mono';white-space:nowrap;padding-right:8px">${escHtml(t.ini)}–${escHtml(t.fin)}</td><td>${t.tipo === 'practica' ? '🏫 ' : '📖 '}${escHtml(t.titulo)}${t.tipo === 'practica' ? ' <em>(práctica presencial)</em>' : ''}</td><td>${escHtml(t.profesorNombre || '')}</td></tr>`).join('')}</tbody></table></div>`).join('')}
+        <div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Cerrar</button></div>
+      </div></div>`;
+  } catch (e) { toast('No se pudo cargar el horario: ' + e.message, 'error'); }
 }
 
 /* ════════════════════════════════════════════════
@@ -4501,7 +4670,8 @@ async function renderCursos(mc, params = {}) {
   if (currentRole !== 'admin') { mc.innerHTML = '<div class="empty-state"><div class="icon">🔒</div><p>Solo el administrador puede ver esta sección.</p></div>'; return; }
   mc.innerHTML = '<div class="empty-state"><div class="icon">⏳</div><p>Cargando cursos...</p></div>';
   try {
-    const [cs, ms, mt, profs] = await Promise.all([db.collection('liveClasses').get(), db.collection('mallas').get(), db.collection('matriculas').get(), cargarProfesoresLista()]);
+    const [cs, ms, mt, profs, pg] = await Promise.all([db.collection('liveClasses').get(), db.collection('mallas').get(), db.collection('matriculas').get(), cargarProfesoresLista(), db.collection('programacion').get().catch(() => ({ docs: [] }))]);
+    _cur.prog = new Map(pg.docs.map(d => [d.id, d.data()]));
     _cur.clases = cs.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => _cursoIdDe(c));
     _cur.mallas = new Map(ms.docs.map(d => [d.id, d.data()]));
     _cur.matr = mt.docs.map(d => d.data());
@@ -4553,7 +4723,10 @@ function pintarCursoDetalle(mc) {
   const lista = todos.filter(c => _cur.ver === 'todos' || c.status !== 'finished' && _tsDate(c.scheduledAt) >= hoy);
   const malla = _cur.mallas.get(id)?.asignaturas || [];
   const agend = {}; todos.forEach(c => (c.segmentos || []).forEach(s => { const k = normTxt(s.titulo); agend[k] = (agend[k] || 0) + (s.durMin || 0); }));
-  const filasMod = malla.map(a => { const h = Math.round((agend[normTxt(a.nombre)] || 0) / 6) / 10;
+  const mh = _cur.prog?.get(id)?.minHora || MIN_HORA;
+  const hProg = {}; (_cur.prog?.get(id)?.tramos || []).forEach(t => { const k = normTxt(t.titulo); const x = hProg[k] = hProg[k] || { teo: 0, pra: 0 }; if (t.tipo === 'practica') x.pra += t.horas || 0; else x.teo += t.horas || 0; });
+  const nf = n => String(Math.round(n * 10) / 10).replace('.', ',');
+  const filasMod = malla.map(a => { const hp = hProg[normTxt(a.nombre)]; const h = hp ? `${nf(hp.teo + hp.pra)} (${nf(hp.teo)} teóricas + ${nf(hp.pra)} prácticas)` : nf((agend[normTxt(a.nombre)] || 0) / mh);
     return `<tr><td><strong>${escHtml(a.nombre)}</strong></td><td>${escHtml(String(a.horas || 0))} h</td><td>${h} h</td><td>${a.profesorNombre ? escHtml(a.profesorNombre) : '<span style="color:var(--text-light)">sin titular</span>'}</td></tr>`; }).join('');
   const opts = (sel) => `<option value="">— sin profesor —</option>` + _cur.profs.map(p => `<option value="${escHtml(p.uid)}" ${p.uid === sel ? 'selected' : ''}>${escHtml(p.name)}</option>`).join('');
   const bloques = lista.map(c => {
@@ -4573,12 +4746,13 @@ function pintarCursoDetalle(mc) {
       <div><h2>📚 ${escHtml(nombre)}</h2><div class="breadcrumb"><a onclick="navigate('cursos')">Cursos</a> › ${escHtml(nombre)}</div></div>
       <div class="flex gap-2 flex-wrap">
         <button class="btn btn-secondary" onclick="navigate('import-classes',{cursoId:'${escHtml(id)}'})">➕ Agregar días (Excel)</button>
+        <button class="btn btn-secondary" onclick="verHorarioCurso('${escHtml(id)}')">📅 Horario completo</button>
         <button class="btn btn-secondary" onclick="navigate('matriculas')">🎓 Matrículas</button>
       </div>
     </div>
     <div class="card" style="margin-bottom:20px">
       <div class="card-header"><h3>📋 Módulos y profesor titular</h3><button class="btn btn-sm btn-secondary" onclick="navigate('malla',{cursoId:'${escHtml(id)}'})">✏️ Editar módulos</button></div>
-      ${malla.length ? `<div class="table-wrap"><table><thead><tr><th>Módulo</th><th>Horas del programa</th><th>Horas agendadas</th><th>Titular</th></tr></thead><tbody>${filasMod}</tbody></table></div>`
+      ${malla.length ? `<div class="table-wrap"><table><thead><tr><th>Módulo</th><th>Horas del programa</th><th>Horas agendadas (de ${mh} min)</th><th>Titular</th></tr></thead><tbody>${filasMod}</tbody></table></div>`
         : '<p style="font-size:13px;color:var(--text-mid)">Este curso aún no tiene módulos definidos. Pulsa <strong>Editar módulos</strong> → "Crear desde los bloques agendados".</p>'}
     </div>
     <div class="card">
@@ -4725,18 +4899,20 @@ function aplicarCopiaMalla() {
   m.asignaturas.forEach(a => { if (!ya.has(normTxt(a.nombre))) _malla.asig.push({ ...a }); });
   pintarMalla(); toast('✅ Malla copiada. Revisa y guarda.', 'success');
 }
-function mallaDesdeBloques() {
+async function mallaDesdeBloques() {
   const mapa = new Map();
   _malla.clases.filter(c => (c.cursoId || slugCurso(c.courseName)) === _malla.cursoId).forEach(c => (c.segmentos || []).forEach(g => {
     const k = normTxt(g.titulo); if (!mapa.has(k)) mapa.set(k, { nombre: g.titulo, min: 0, profs: {}, codModulo: g.codModulo || '' });
     const x = mapa.get(k); x.min += g.durMin || 0; if (g.profesorUid) x.profs[g.profesorUid] = (x.profs[g.profesorUid] || 0) + 1;
   }));
+  let progH = null, minH = 0;
+  try { const pg = await db.collection('programacion').doc(_malla.cursoId).get(); if (pg.exists) { minH = pg.data().minHora || 0; progH = {}; (pg.data().tramos || []).forEach(t => { const k = normTxt(t.titulo); progH[k] = (progH[k] || 0) + (t.horas || 0); if (!mapa.has(k)) mapa.set(k, { nombre: t.titulo, min: 0, profs: {}, codModulo: '' }); }); } } catch (e) { progH = null; }
   if (!mapa.size) return toast('No hay bloques con tramos en este curso.', 'info');
   const ya = new Set(_malla.asig.map(a => normTxt(a.nombre)));
   mapa.forEach((x, k) => {
     if (ya.has(k)) return;
     const top = Object.entries(x.profs).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
-    _malla.asig.push({ nombre: x.nombre, horas: Math.round(x.min / 6) / 10, profesorUid: top, profesorNombre: _malla.profs.find(p => p.uid === top)?.name || '', codModulo: x.codModulo });
+    _malla.asig.push({ nombre: x.nombre, horas: progH && progH[k] !== undefined ? Math.round(progH[k] * 10) / 10 : Math.round(x.min / (minH || MIN_HORA) * 10) / 10, profesorUid: top, profesorNombre: _malla.profs.find(p => p.uid === top)?.name || '', codModulo: x.codModulo });
   });
   pintarMalla(); toast('✅ Malla armada con lo agendado. Revisa las horas y los titulares, y guarda.', 'success', 6000);
 }
@@ -5119,8 +5295,11 @@ async function renderTeacherRoom(mc, params={}) {
 
   // Construir embed del video
   let videoEmbed = '';
-  const _esJitsi = cls.videoType === 'jitsi' && cls.jitsiRoom;
-  if (_esJitsi) {
+  const _presencial = cls.modalidadBloque === 'presencial';
+  const _esJitsi = cls.videoType === 'jitsi' && cls.jitsiRoom && !_presencial;
+  if (_presencial) {
+    videoEmbed = `<div class="video-placeholder"><div class="icon">🏫</div><p><strong>Bloque presencial.</strong> No hay videoconferencia: los alumnos registran su sesión SENCE aquí y la clase se hace en la sala.</p></div>`;
+  } else if (_esJitsi) {
     videoEmbed = `<div id="jitsiHost" class="jitsi-host"><div class="video-placeholder"><div class="icon">📡</div><p>Conectando a la sala...</p></div></div>`;
   } else if (cls.videoType === 'jitsi') {
     videoEmbed = `<div class="video-placeholder"><div class="icon">🔒</div><p>Esta clase no tiene una sala Jitsi válida configurada.</p></div>`;
@@ -5185,6 +5364,7 @@ async function renderTeacherRoom(mc, params={}) {
 
     <!-- VIDEO -->
     <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px">
+      ${_ramoHost(cls)}
       <div class="video-room">${videoEmbed}</div>
       ${_esJitsi ? `<div style="padding:10px 14px;border-top:1px solid var(--border,#e5e7eb);font-size:12.5px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button class="btn btn-sm btn-secondary" onclick="reingresarSala('${classId}')">🔄 Reingresar a la sala</button><button class="btn btn-sm btn-secondary" onclick="pantallaCompletaSala()">⛶ Pantalla completa horizontal</button><span style="color:var(--text-mid)">Si te desconectaste o la sala no carga, reingresa aquí. Se revisa el estado del bloque.</span></div>` : ''}
     </div>
@@ -5222,7 +5402,8 @@ async function renderTeacherRoom(mc, params={}) {
     </div>`;
 
   initClassChat(classId);
-  if (cls.videoType === 'jitsi' && cls.jitsiRoom) montarVideoJitsi('jitsiHost', classId, cls);
+  if (cls.videoType === 'jitsi' && cls.jitsiRoom && cls.modalidadBloque !== 'presencial') montarVideoJitsi('jitsiHost', classId, cls);
+  iniciarRelojRamo(cls);
   cargarEstadoLibroClase(classId);
 
   // 1. Registrar entrada del profesor en teacherSessions
