@@ -982,6 +982,7 @@ auth.onAuthStateChanged(async (user) => {
     try {
       const doc = await db.collection('users').doc(user.uid).get();
       currentRole = doc.exists ? (doc.data().role || 'student') : 'student';
+      if (doc.exists && doc.data().suspendido === true) { await auth.signOut(); alert('Tu cuenta está suspendida. Contacta a INASEP: +56 9 4406 1866.'); return; }
     } catch(e) { currentRole = 'student'; }
     showDashboard();
   } else {
@@ -1135,13 +1136,13 @@ function updateSidebar() {
     { label: '⚙️ Config. SENCE',   view: 'sence-config' },
     { label: '🖥️ Servidor Jitsi',  view: 'jitsi-servidor' },
   ] : isTeacher ? [
-    { label: '📹 Mis Clases',      view: 'live-classes' },
+    { label: '🏠 Mi curso',        view: 'teacher-home' },
+    { label: '📹 Todos mis bloques', view: 'live-classes' },
     { label: '📖 Libro de Clases', view: 'libro-clases' },
     { label: '💬 Foro / Mensajería', view: 'foro' },
     { label: '👥 Asistencia',      view: 'teacher-attendance' },
   ] : [
     { label: '🏠 Mis Cursos',      view: 'my-courses'    },
-    { label: '📹 Clases en Vivo',  view: 'live-classes'  },
     { label: '📋 Mi Asistencia',   view: 'my-attendance' },
     { label: '📜 Declaración Jurada', view: 'mi-declaracion' },
     { label: '💬 Foro del Curso',  view: 'foro' },
@@ -1178,11 +1179,11 @@ function navigate(view, params={}) {
   renderMain(view, params);
 }
 function renderMain(view, params={}) {
-  if (!view) view = currentRole === 'admin' ? 'dashboard' : currentRole === 'teacher' ? 'live-classes' : 'my-courses';
+  if (!view) view = currentRole === 'admin' ? 'dashboard' : currentRole === 'teacher' ? 'teacher-home' : 'my-courses';
   currentView = view;
   const _titulos = { 'dashboard': 'Panel', 'live-classes': currentRole === 'teacher' ? 'Mis Clases' : 'Clases en Vivo', 'cursos': 'Cursos', 'new-class': 'Clase en Vivo', 'import-classes': 'Nuevo curso',
     'matriculas': 'Matrículas', 'malla': 'Módulos del curso', 'attendance': 'Asistencia', 'sence-log': 'Registro SENCE', 'sence-config': 'Configuración SENCE', 'jitsi-servidor': 'Servidor Jitsi',
-    'sence-sic': 'Envío SIC', 'alumnos': 'Alumnos', 'profesores': 'Profesores', 'teacher-attendance': 'Asistencia', 'my-courses': 'Mis Cursos', 'my-attendance': 'Mi Asistencia',
+    'sence-sic': 'Envío SIC', 'alumnos': 'Alumnos', 'profesores': 'Profesores', 'teacher-attendance': 'Asistencia', 'my-courses': 'Mis Cursos', 'teacher-home': 'Mi curso', 'my-attendance': 'Mi Asistencia',
     'libro-clases': 'Libro de Clases', 'declaraciones': 'Declaraciones Juradas', 'mi-declaracion': 'Mi Declaración Jurada', 'foro': 'Foro / Mensajería', 'class-room': 'Mi clase', 'teacher-room': 'Clase' };
   const _tt = document.getElementById('topbarTitle'); const _nombre = _titulos[String(view).split('/')[0]]; if (_tt && _nombre) _tt.textContent = _nombre;
   const mc = document.getElementById('mainContent');
@@ -1205,6 +1206,7 @@ function renderMain(view, params={}) {
     'profesores':         renderProfesores,
     'teacher-attendance': renderTeacherAttendance,
     'my-courses':         renderMyCourses,
+    'teacher-home':       renderTeacherHome,
     'my-attendance':      renderMyAttendance,
     'class-room':         renderClassRoom,
     'teacher-room':       renderTeacherRoom,
@@ -1367,7 +1369,7 @@ async function renderLiveClasses(mc) {
       return;
     }
 
-    cont.innerHTML = snap.docs.map(doc => {
+    const card = doc => {
       const c = doc.data();
       const isLive = c.status === 'active';
       const isPast = c.status === 'finished';
@@ -1408,10 +1410,68 @@ async function renderLiveClasses(mc) {
             <div class="live-class-actions">${btn}</div>
           </div>
         </div>`;
+    };
+    // Un curso = un grupo: se muestra el bloque en curso (o el próximo) y el resto queda plegado
+    const _g = new Map();
+    [...snap.docs].sort((a, b) => (a.data().scheduledAt?.toMillis?.() || 0) - (b.data().scheduledAt?.toMillis?.() || 0)).forEach(d => {
+      const c = d.data(), k = c.cursoId || c.courseName || d.id; if (!_g.has(k)) _g.set(k, []); _g.get(k).push(d);
+    });
+    const _estL = await cargarEstadosCurso();
+    cont.innerHTML = [..._g.values()].map(items => {
+      const c0 = items[0].data();
+      const principal = items.find(d => d.data().status === 'active') || items.find(d => d.data().status !== 'finished') || items[items.length - 1];
+      const resto = items.filter(d => d !== principal);
+      const cerr = estadoCursoEf(_estL.get(c0.cursoId)).cerrado;
+      if (items.length === 1) return card(principal);
+      return `<div style="margin-bottom:22px"><div style="font-weight:700;color:var(--green-900);margin:0 0 6px">📚 ${escHtml(c0.courseName || 'Sin curso')} ${cerr ? '<span class="badge badge-gray">Curso cerrado</span>' : ''}</div>
+        ${card(principal)}
+        <details style="margin:-6px 0 0 6px"><summary style="cursor:pointer;font-size:13px;color:var(--text-mid)">Ver los otros ${resto.length} bloque(s) de este curso</summary>${resto.map(card).join('')}</details></div>`;
     }).join('') + `<div style="text-align:center;margin:14px 0"><button class="btn btn-secondary" onclick="verClasesAnteriores()">📂 Ver clases anteriores (mostrando desde hace ${_clasesDias} días)</button></div>`;
   } catch(e) {
     document.getElementById('classesContainer').innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>${e.message}</p></div>`;
   }
+}
+
+/* ════════════════════════════════════════════════
+   PROFESOR: INICIO = SU CURSO ACTIVO
+════════════════════════════════════════════════ */
+async function renderTeacherHome(mc) {
+  mc.innerHTML = `<div class="page-header"><div><h2>🏠 Mi curso</h2><div class="breadcrumb">Tu curso activo y el ramo de hoy</div></div></div><div id="thBody"><div class="empty-state"><div class="icon">⏳</div><p>Cargando...</p></div></div>`;
+  const body = document.getElementById('thBody');
+  try {
+    const desde = new Date(); desde.setDate(desde.getDate() - 60);
+    const [snapAll, estados] = await Promise.all([
+      db.collection('liveClasses').where('scheduledAt', '>=', firebase.firestore.Timestamp.fromDate(desde)).orderBy('scheduledAt', 'asc').limit(400).get(),
+      cargarEstadosCurso()]);
+    const mis = snapAll.docs.filter(d => puedeVerClase(d.data(), null));
+    if (!mis.length) { body.innerHTML = '<div class="empty-state"><div class="icon">📭</div><p>No tienes bloques asignados todavía.<br>Cuando INASEP te asigne a un curso, aparecerá aquí.</p></div>'; return; }
+    const g = new Map();
+    mis.forEach(d => { const c = d.data(), k = c.cursoId || c.courseName || d.id; if (!g.has(k)) g.set(k, []); g.get(k).push(d); });
+    const activos = [], cerrados = [];
+    g.forEach((items, k) => { const c0 = items[0].data(); (c0.cursoId && estadoCursoEf(estados.get(c0.cursoId)).cerrado ? cerrados : activos).push(items); });
+    const hoy0 = new Date(); hoy0.setHours(0, 0, 0, 0);
+    const tarjeta = items => {
+      const c0 = items[0].data();
+      const vivo = items.find(d => d.data().status === 'active');
+      const futuro = items.find(d => d.data().status !== 'finished' && _tsDate(d.data().scheduledAt) >= hoy0);
+      const doc = vivo || futuro || items[items.length - 1]; const c = doc.data();
+      const live = c.status === 'active', fin = c.status === 'finished';
+      const proximos = items.filter(d => d.data().status !== 'finished' && d !== doc).length;
+      return `<div class="live-class-card"><div class="live-class-header"><h4>${escHtml(c0.courseName || c.title)}</h4>
+        ${live ? '<span class="badge badge-live">🔴 EN CURSO</span>' : fin ? '<span class="badge badge-gray">Sin bloques pendientes</span>' : '<span class="badge badge-blue">📅 Próximo bloque</span>'}</div>
+        <div class="live-class-body">${fin ? '' : _ramoHost(c)}
+          <div class="live-class-meta"><span>📅 ${fmtDateTime(c.scheduledAt)}</span><span>⏱ ${c.duration || 60} min</span><span>${escHtml(String(c.title || '').split('—').pop().trim())}</span></div>
+          <div class="live-class-actions">
+            <button class="btn ${live ? 'btn-live' : 'btn-primary'}" style="font-size:16px;padding:12px 22px" onclick="navigate('teacher-room',{id:'${doc.id}'})">${live ? '👨‍🏫 Entrar a la sala (en curso)' : fin ? '👁️ Ver bloque' : '▶️ Entrar / iniciar bloque'}</button>
+            ${c0.cursoId ? `<button class="btn btn-secondary" onclick="verHorarioCurso('${escHtml(c0.cursoId)}')">📅 Horario del curso</button>` : ''}
+            <button class="btn btn-secondary" onclick="navigate('teacher-attendance')">👥 Asistencia</button>
+            <button class="btn btn-secondary" onclick="navigate('libro-clases')">📖 Libro de clases</button></div>
+          ${proximos > 0 ? `<p style="font-size:12px;color:var(--text-light);margin-top:8px">Tienes ${proximos} bloque(s) más en este curso (en «Todos mis bloques»).</p>` : ''}
+        </div></div>`;
+    };
+    body.innerHTML = (activos.map(tarjeta).join('') || '<div class="empty-state"><div class="icon">✅</div><p>No tienes cursos activos. Tus cursos anteriores están más abajo (solo lectura).</p></div>')
+      + (cerrados.length ? `<h3 style="margin:26px 0 8px;color:var(--text-mid)">📁 Cursos cerrados (solo lectura)</h3>` + cerrados.map(items => { const c0 = items[0].data(); return `<div class="live-class-card"><div class="live-class-header"><h4>${escHtml(c0.courseName || '')}</h4><span class="badge badge-gray">Cerrado</span></div><div class="live-class-body"><div class="live-class-actions"><button class="btn btn-secondary" onclick="navigate('libro-clases')">📖 Libro de clases</button><button class="btn btn-secondary" onclick="navigate('teacher-attendance')">👥 Asistencia</button></div></div></div>`; }).join('') : '');
+  } catch (e) { body.innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>${escHtml(e.message)}</p></div>`; }
 }
 
 /* ════════════════════════════════════════════════
@@ -1715,6 +1775,9 @@ async function renderClassRoom(mc, params={}) {
   const cls = doc.data();
   if (currentRole === 'student' && cls.cursoId && !(await cargarMisMatriculas()).has(cls.cursoId)) {
     mc.innerHTML='<div class="empty-state"><div class="icon">🔒</div><p>No estás matriculado en este curso. Contacta a INASEP.</p></div>'; return;
+  }
+  if (currentRole === 'student' && cls.cursoId && !_cursoAbierto(await cargarEstadosCurso(), cls.cursoId)) {
+    mc.innerHTML='<div class="empty-state"><div class="icon">✅</div><p><strong>Tu curso ya finalizó.</strong><br>Puedes ver tu asistencia en «Mis Cursos».</p></div>'; return;
   }
 
   // Buscar registro de asistencia actual del usuario
@@ -2812,11 +2875,18 @@ async function renderMyCourses(mc) {
 
   try {
     const snapAll = await db.collection('liveClasses').where('status','!=','finished').orderBy('status').get();
-    const mats = await cargarMisMatriculas();
-    const snap = { docs: snapAll.docs.filter(d => puedeVerClase(d.data(), mats)) };
+    const matDocs = await cargarMisMatriculasDocs(); const mats = new Set(matDocs.map(m => m.cursoId));
+    const estados = await cargarEstadosCurso();
+    const snap = { docs: snapAll.docs.filter(d => puedeVerClase(d.data(), mats) && _cursoAbierto(estados, d.data().cursoId)) };
     snap.empty = snap.docs.length === 0;
     const cont = document.getElementById('myCoursesContainer');
-    if (snap.empty) { cont.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>No hay clases disponibles por ahora.</p></div>'; return; }
+    // Cursos finalizados (cerrados por el admin o vencidos): sin entrada a clases; solo asistencia y declaración durante el plazo
+    const finalizados = matDocs.filter(m => !_cursoAbierto(estados, m.cursoId)).map(m => ({ m, ef: estadoCursoEf(estados.get(m.cursoId)) }))
+      .filter(x => Date.now() <= x.ef.cerradoAt + x.ef.verDias * 86400000);
+    const htmlFin = finalizados.map(x => `<div class="live-class-card"><div class="live-class-header"><h4>${escHtml(x.m.courseName || x.m.cursoId)}</h4><span class="badge badge-gray">✅ Curso finalizado</span></div>
+      <div class="live-class-body"><p style="font-size:14px;margin:0 0 10px">Tu curso <strong>finalizó</strong>. Ya no hay clases en vivo, pero puedes revisar tu asistencia y tu declaración jurada hasta el ${escHtml(fmtDateTime(new Date(x.ef.cerradoAt + x.ef.verDias * 86400000)).split(' ')[0])}.</p>
+      <div class="live-class-actions"><button class="btn btn-primary" onclick="navigate('my-attendance')">📋 Mi asistencia</button><button class="btn btn-secondary" onclick="navigate('mi-declaracion')">📜 Mi declaración jurada</button></div></div></div>`).join('');
+    if (snap.empty) { cont.innerHTML = htmlFin || '<div class="empty-state"><div class="icon">📭</div><p>No hay clases disponibles por ahora.</p></div>'; return; }
 
     // UN solo acceso por curso: el bloque en curso o, si no hay, el próximo. El ramo que se dicta se ve antes de entrar.
     const grupos = new Map();
@@ -2852,7 +2922,7 @@ async function renderMyCourses(mc) {
             ${otros > 0 ? `<p style="font-size:12px;color:var(--text-light);margin-top:6px">Hay ${otros} bloque(s) más programados de este curso.</p>` : ''}
           </div>
         </div>`;
-    }).join('');
+    }).join('') + htmlFin;
   } catch(e) {
     document.getElementById('myCoursesContainer').innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>${e.message}</p></div>`;
   }
@@ -2871,7 +2941,9 @@ async function renderMyAttendance(mc) {
       .where('userId','==',currentUser.uid)
       .orderBy('createdAt','desc').limit(100).get();
     const cont = document.getElementById('myAttContainer');
-    if (snap.empty) { cont.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>Sin registros de asistencia aún.</p></div>'; return; }
+    const _est = await cargarEstadosCurso();
+    const _vis = snap.docs.filter(d => { const ef = estadoCursoEf(_est.get(d.data().cursoId)); return !ef.cerrado || Date.now() <= ef.cerradoAt + ef.verDias * 86400000; });
+    if (!_vis.length) { cont.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>Sin registros de asistencia disponibles.</p></div>'; return; }
 
     cont.innerHTML = `
       <div class="card">
@@ -2879,7 +2951,7 @@ async function renderMyAttendance(mc) {
           <table>
             <thead><tr><th>Clase</th><th>Mi RUN</th><th>Inicio SENCE</th><th>Cierre SENCE</th><th>Estado</th></tr></thead>
             <tbody>
-              ${snap.docs.map(d => {
+              ${_vis.map(d => {
                 const a = d.data();
                 return `<tr>
                   <td><strong>${escHtml(a.classTitle||'—')}</strong></td>
@@ -2927,6 +2999,11 @@ María González	9876543-2
 Carlos Rodríguez	15234567-K" style="font-family:'DM Mono',monospace;font-size:13px"></textarea>
         <small>Puedes copiar directamente desde Excel (Ctrl+C) y pegar aquí (Ctrl+V).</small>
       </div>
+      <div class="form-group">
+        <label>¿En qué curso se inscribe a estos alumnos? *</label>
+        <div id="bulkCursoBox"><select id="bulkCurso" disabled><option>Cargando cursos...</option></select></div>
+        <small>Cada lista de alumnos pertenece a un curso. Solo podrán entrar a las clases de ese curso. Los alumnos de cursos ya cerrados no se mezclan con este.</small>
+      </div>
       <div id="bulkPreview" style="margin-bottom:12px"></div>
       <div class="flex gap-2">
         <button class="btn btn-secondary" onclick="previewBulk()">👁️ Previsualizar</button>
@@ -2952,6 +3029,7 @@ Carlos Rodríguez	15234567-K" style="font-family:'DM Mono',monospace;font-size:1
     </div>`;
 
   cargarListaAlumnos();
+  cursosVigentes().then(c => { const b = document.getElementById('bulkCursoBox'); if (b) b.innerHTML = htmlSelectorCurso('bulkCurso', c); }).catch(() => {});
 }
 
 async function cargarListaAlumnos() {
@@ -2976,13 +3054,14 @@ async function cargarListaAlumnos() {
               return `<tr>
                 <td><div style="display:flex;align-items:center;gap:8px">
                   <div class="participant-avatar">${(u.name||'?').slice(0,2).toUpperCase()}</div>
-                  <strong>${escHtml(u.name||'—')}</strong>
+                  <strong>${escHtml(u.name||'—')}</strong> ${u.suspendido ? '<span class="badge badge-orange">⏸️ Suspendido</span>' : ''}
                 </div></td>
                 <td><span style="font-family:'DM Mono';font-size:13px">${escHtml(u.rut||'—')}</span></td>
                 <td><span style="font-size:11px;color:var(--text-light)">${escHtml(u.email||'—')}</span></td>
                 <td>${badgeClave(u)}</td>
                 <td>
                   <button class="btn btn-sm btn-secondary" onclick="resetPasswordUsuario('${d.id}','${escHtml(u.rut||'')}','${escHtml(u.name||'')}')">🔑 Reset Pass</button>
+                  ${u.suspendido ? `<button class="btn btn-sm btn-success" onclick="suspenderCuenta('${d.id}','${escHtml(u.name||'')}',false)">▶️ Reactivar</button>` : `<button class="btn btn-sm btn-warning" onclick="suspenderCuenta('${d.id}','${escHtml(u.name||'')}',true)">⏸️ Suspender</button>`}
                   <button class="btn btn-sm btn-danger"    onclick="eliminarAlumno('${d.id}','${escHtml(u.name||'')}')">🗑️</button>
                 </td>
               </tr>`;
@@ -3030,6 +3109,25 @@ function parseBulkLine(line) {
 }
 
 let _bulkAlumnos = [];
+/* Cursos vigentes (no cerrados) para elegir en qué curso se inscribe a los alumnos nuevos */
+async function cursosVigentes() {
+  const [cs, est] = await Promise.all([db.collection('liveClasses').get(), cargarEstadosCurso()]);
+  const m = new Map();
+  cs.docs.forEach(d => { const c = d.data(); const id = c.cursoId; if (id && !m.has(id) && !estadoCursoEf(est.get(id)).cerrado) m.set(id, c.courseName || id); });
+  return [...m.entries()];
+}
+function htmlSelectorCurso(idSel, cursos) {
+  return `<select id="${idSel}"><option value="">— Elige el curso —</option>${cursos.map(([id, n]) => `<option value="${escHtml(id)}">${escHtml(n)}</option>`).join('')}<option value="__ninguno">Solo crear las cuentas (sin inscribir)</option></select>`;
+}
+/* Inscribe en el curso (si ya tiene matrícula no la toca: un retirado sigue retirado hasta que el admin lo reincorpore) */
+async function inscribirEnCurso(rut, nombre, cursoId, courseName) {
+  const q = await db.collection('users').where('rut', '==', rut).limit(1).get();
+  if (q.empty) return 'sin-cuenta';
+  const uid = q.docs[0].id, ref = db.collection('matriculas').doc(`${uid}__${cursoId}`);
+  if ((await ref.get()).exists) return 'ya';
+  await ref.set({ userId: uid, rut, nombre, cursoId, courseName, estado: 'activo', createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+  return 'inscrito';
+}
 let _teacherClassId = null;
 
 function previewBulk() {
@@ -3084,6 +3182,10 @@ function previewBulk() {
 
 async function crearAlumnosMasivo() {
   if (_bulkAlumnos.length === 0) return toast('⚠️ Previsualiza primero.','warning');
+  const selC = document.getElementById('bulkCurso'); const cursoSel = selC ? selC.value : '';
+  if (!cursoSel) return toast('⚠️ Elige en qué curso se inscribe a estos alumnos (o «Solo crear las cuentas»).', 'warning', 6000);
+  const cursoNombre = cursoSel === '__ninguno' ? '' : selC.options[selC.selectedIndex].text;
+  if (!confirm(cursoSel === '__ninguno' ? `¿Crear ${_bulkAlumnos.length} cuentas SIN inscribirlas en ningún curso?` : `¿Crear/inscribir ${_bulkAlumnos.length} alumnos en el curso «${cursoNombre}»?`)) return;
 
   const btn  = document.getElementById('btnBulkCreate');
   const prog = document.getElementById('bulkProgress');
@@ -3093,7 +3195,7 @@ async function crearAlumnosMasivo() {
   btn.disabled  = true;
   prog.style.display = 'block';
 
-  let creados = 0, omitidos = 0, errores = 0;
+  let creados = 0, omitidos = 0, errores = 0, inscritos = 0;
 
   for (let i = 0; i < _bulkAlumnos.length; i++) {
     const a    = _bulkAlumnos[i];
@@ -3102,8 +3204,8 @@ async function crearAlumnosMasivo() {
     stat.textContent = `Procesando ${i+1}/${_bulkAlumnos.length}: ${a.nombre}...`;
 
     try {
-      if (await crearCuenta(a.nombre, a.rut, 'student') === 'existe') { omitidos++; continue; }
-      creados++;
+      if (await crearCuenta(a.nombre, a.rut, 'student') === 'existe') omitidos++; else creados++;
+      if (cursoSel !== '__ninguno' && await inscribirEnCurso(a.rut, a.nombre, cursoSel, cursoNombre) === 'inscrito') inscritos++;
     } catch(e) {
       if (e.code === 'auth/email-already-in-use') { omitidos++; }
       else { errores++; console.warn('Error creando', a.nombre, e.message); }
@@ -3112,9 +3214,9 @@ async function crearAlumnosMasivo() {
 
   bar.style.width = '100%';
   stat.innerHTML = `<strong style="color:var(--success)">✅ Completado:</strong>
-    ${creados} creados · ${omitidos} ya existían · ${errores} errores`;
+    ${creados} creados · ${omitidos} ya existían · ${inscritos} inscritos en «${escHtml(cursoNombre || '—')}» · ${errores} errores`;
 
-  toast(`✅ ${creados} alumnos creados correctamente.`, 'success', 6000);
+  toast(`✅ ${creados} alumnos creados${cursoNombre ? ' e inscritos en ' + cursoNombre : ''}.`, 'success', 8000);
   _bulkAlumnos = [];
   document.getElementById('bulkTable').value = '';
   document.getElementById('bulkPreview').innerHTML = '';
@@ -3178,10 +3280,12 @@ function showAgregarUsuario(role) {
              style="font-family:'DM Mono';font-size:15px;letter-spacing:1px" oninput="formatRutInput(this)">
       <small>La contraseña inicial son los últimos 6 dígitos del RUT. Solo el administrador puede cambiarla (botón Reset Pass).</small>
     </div>
+    ${role === 'student' ? `<div class="form-group"><label>Curso en que se inscribe *</label><div id="au_cursoBox"><select id="au_curso" disabled><option>Cargando...</option></select></div></div>` : ''}
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="crearUsuarioIndividual('${role}')">✅ Crear ${r.singular}</button>
     </div>`);
+  if (role === 'student') cursosVigentes().then(c => { const b = document.getElementById('au_cursoBox'); if (b) b.innerHTML = htmlSelectorCurso('au_curso', c); }).catch(() => {});
 }
 const showAgregarAlumno = () => showAgregarUsuario('student');
 const showAgregarProfesor = () => showAgregarUsuario('teacher');
@@ -3192,8 +3296,11 @@ async function crearUsuarioIndividual(role) {
   const rut = document.getElementById('au_rut').value.trim();
   if (!nombre) return toast('⚠️ Ingresa el nombre.', 'warning');
   if (!validarRut(rut)) return toast('⚠️ RUT inválido.', 'warning');
+  const selC = role === 'student' ? document.getElementById('au_curso') : null;
+  if (role === 'student' && (!selC || !selC.value)) return toast('⚠️ Elige el curso en que se inscribe (o «Solo crear la cuenta»).', 'warning');
   try {
     if (await crearCuenta(nombre, rut, role) === 'existe') return toast('⚠️ Este RUT ya está registrado.', 'warning');
+    if (selC && selC.value !== '__ninguno') await inscribirEnCurso(rut, nombre, selC.value, selC.options[selC.selectedIndex].text);
     closeModal();
     toast(`✅ ${r.singular} ${nombre} creado. Contraseña inicial: ${rutToPassword(rut)}`, 'success', 7000);
     r.refrescar();
@@ -3215,6 +3322,21 @@ async function eliminarUsuario(role, uid, nombre) {
 }
 const eliminarAlumno = (uid, nombre) => eliminarUsuario('student', uid, nombre);
 const eliminarProfesor = (uid, nombre) => eliminarUsuario('teacher', uid, nombre);
+
+/* Admin: suspende o reactiva una cuenta (reversible; no borra nada). El Worker bloquea el acceso y desactiva el inicio de sesión. */
+async function suspenderCuenta(uid, nombre, suspender) {
+  let motivo = '';
+  if (suspender) {
+    const m = prompt(`Suspender la cuenta de ${nombre}.\n\nNo podrá entrar a la plataforma ni a SENCE hasta que la reactives. Su historial se conserva.\n\nMotivo (obligatorio):`);
+    if (m === null) return; if (!m.trim()) return toast('⚠️ Escribe el motivo.', 'warning'); motivo = m.trim();
+  } else if (!confirm(`¿Reactivar la cuenta de ${nombre}?`)) return;
+  try {
+    const res = await workerFetch('/api/admin/suspender', { method: 'POST', body: JSON.stringify({ uid, suspender, motivo }) });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || ('Error del servidor (' + res.status + ')'));
+    toast(suspender ? '⏸️ Cuenta suspendida.' : '▶️ Cuenta reactivada.', 'success'); cargarListaAlumnos();
+  } catch (e) { toast('❌ ' + e.message, 'error', 7000); }
+}
 
 /* Admin: restablece de verdad la contraseña (Worker + Firebase Auth) */
 async function resetPasswordUsuario(uid, rut, nombre) {
@@ -4021,12 +4143,28 @@ async function cargarProfesoresLista() {
     return s.docs.map(d => ({ uid: d.id, name: d.data().name || '', rut: d.data().rut || '' }));
   } catch (e) { console.warn('profesores', e.message); return []; }
 }
-async function cargarMisMatriculas() {
+async function cargarMisMatriculasDocs() {
   try {
     const s = await db.collection('matriculas').where('userId', '==', currentUser.uid).get();
-    return new Set(s.docs.map(d => d.data().cursoId));
-  } catch (e) { console.warn('matriculas', e.message); return new Set(); }
+    return s.docs.map(d => d.data()).filter(m => m.estado !== 'retirado');   // un alumno retirado ya no ve el curso
+  } catch (e) { console.warn('matriculas', e.message); return []; }
 }
+async function cargarMisMatriculas() { return new Set((await cargarMisMatriculasDocs()).map(m => m.cursoId)); }
+/* Estado de los cursos (activo / cerrado). Sin registro = abierto (cursos antiguos). */
+async function cargarEstadosCurso() {
+  try { const s = await db.collection('cursoEstado').get(); return new Map(s.docs.map(d => [d.id, d.data()])); }
+  catch (e) { console.warn('cursoEstado', e.message); return new Map(); }
+}
+const _msTs = v => v && v.toMillis ? v.toMillis() : (v instanceof Date ? v.getTime() : 0);
+/* Misma regla que el Worker: cerrado por el admin, o 1 día después del último bloque programado */
+function estadoCursoEf(e) {
+  if (!e) return { cerrado: false };
+  if (e.estado === 'cerrado') return { cerrado: true, auto: false, cerradoAt: _msTs(e.cerradoAt), verDias: e.verDias || 60 };
+  const fin = Math.max(_msTs(e.finProgramado), _msTs(e.extiendeHasta));
+  if (fin && Date.now() > fin + 86400000) return { cerrado: true, auto: true, cerradoAt: fin + 86400000, verDias: e.verDias || 60 };
+  return { cerrado: false };
+}
+const _cursoAbierto = (estados, cursoId) => !cursoId || !estadoCursoEf(estados.get(cursoId)).cerrado;
 /* ¿Este usuario ve esta clase? (admin: todas · profesor: las suyas · alumno: cursos matriculados) */
 function puedeVerClase(c, mats) {
   if (currentRole === 'admin') return true;
@@ -4528,6 +4666,14 @@ async function ejecutarImportacion() {
       const antes = (prev.exists ? prev.data().tramos || [] : []).filter(t => !ids.has(t.dia));
       await pRef.set({ cursoId, courseName: curso, sala: sala || '', minHora: _imp.minHora, tramos: [...antes, ...tramos].sort((x, y) => (x.dia + x.ini).localeCompare(y.dia + y.ini)), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
     } catch (e) { console.warn('programacion', e.message); }
+    try { // estado del curso: fin programado = fin del último bloque (el Worker bloquea 1 día después aunque no se cierre a mano)
+      const eRef = db.collection('cursoEstado').doc(cursoId); const ant = await eRef.get();
+      const finNuevo = Math.max(0, ...lista.map(b => b.start.getTime() + (b.dur || 60) * 60000));
+      const finPrev = ant.exists ? _msTs(ant.data().finProgramado) : 0;
+      const datos = { cursoId, courseName: curso, finProgramado: firebase.firestore.Timestamp.fromMillis(Math.max(finNuevo, finPrev)), updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+      if (!ant.exists) datos.estado = 'activo';
+      await eRef.set(datos, { merge: true });
+    } catch (e) { console.warn('cursoEstado', e.message); }
     toast(`✅ ${lista.length} bloques creados. Ahora matricula a los alumnos del curso.`, 'success', 7000);
     navigate('matriculas');
   } catch (e) {
@@ -4717,7 +4863,8 @@ async function renderCursos(mc, params = {}) {
   if (currentRole !== 'admin') { mc.innerHTML = '<div class="empty-state"><div class="icon">🔒</div><p>Solo el administrador puede ver esta sección.</p></div>'; return; }
   mc.innerHTML = '<div class="empty-state"><div class="icon">⏳</div><p>Cargando cursos...</p></div>';
   try {
-    const [cs, ms, mt, profs, pg] = await Promise.all([db.collection('liveClasses').get(), db.collection('mallas').get(), db.collection('matriculas').get(), cargarProfesoresLista(), db.collection('programacion').get().catch(() => ({ docs: [] }))]);
+    const [cs, ms, mt, profs, pg, est] = await Promise.all([db.collection('liveClasses').get(), db.collection('mallas').get(), db.collection('matriculas').get(), cargarProfesoresLista(), db.collection('programacion').get().catch(() => ({ docs: [] })), cargarEstadosCurso()]);
+    _cur.estados = est;
     _cur.prog = new Map(pg.docs.map(d => [d.id, d.data()]));
     _cur.clases = cs.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => _cursoIdDe(c));
     _cur.mallas = new Map(ms.docs.map(d => [d.id, d.data()]));
@@ -4735,6 +4882,7 @@ function _mcCursos() { return document.getElementById('mainContent'); }
 function pintarListaCursos(mc) {
   mc = mc || _mcCursos();
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const _arch = []; 
   const tarjetas = [..._cur.cursos].map(([id, nombre]) => {
     const bl = _cur.clases.filter(c => _cursoIdDe(c) === id);
     const fechas = bl.map(c => _tsDate(c.scheduledAt)).filter(Boolean).sort((a, b) => a - b);
@@ -4742,20 +4890,24 @@ function pintarListaCursos(mc) {
     const matr = _cur.matr.filter(m => m.cursoId === id).length;
     const ram = (_cur.mallas.get(id)?.asignaturas || []).length;
     const prox = bl.filter(c => c.status !== 'finished' && _tsDate(c.scheduledAt) >= hoy).length;
-    return `<div class="card" style="cursor:pointer" onclick="navigate('cursos',{cursoId:'${escHtml(id)}'})">
-      <div class="card-header"><h3>📚 ${escHtml(nombre)}</h3><span class="badge badge-green">${prox} bloque(s) por venir</span></div>
+    const _cerr = estadoCursoEf(_cur.estados?.get(id)).cerrado;
+    const _card = `<div class="card" style="cursor:pointer" onclick="navigate('cursos',{cursoId:'${escHtml(id)}'})">
+      <div class="card-header"><h3>📚 ${escHtml(nombre)}</h3>${estadoCursoEf(_cur.estados?.get(id)).cerrado ? '<span class="badge badge-gray">🔒 Curso cerrado</span>' : `<span class="badge badge-green">${prox} bloque(s) por venir</span>`}</div>
       <div style="font-size:13px;color:var(--text-mid);display:flex;gap:18px;flex-wrap:wrap">
         <span>🗓️ ${fechas.length ? escHtml(_fechaCorta(fechas[0]).split(' ')[1]) + ' → ' + escHtml(_fechaCorta(fechas[fechas.length - 1]).split(' ')[1]) : 'sin fechas'}</span>
         <span>📋 ${ram} módulo(s)</span><span>🎓 ${matr} alumno(s) matriculado(s)</span><span>📹 ${bl.length} bloque(s) en total</span></div>
       ${sinProf ? `<div style="margin-top:8px"><span class="badge badge-orange">⚠️ ${sinProf} bloque(s) con tramos sin profesor</span></div>` : ''}
     </div>`;
+    if (_cerr) { _arch.push(_card); return ''; }
+    return _card;
   }).join('');
   mc.innerHTML = `
     <div class="page-header">
       <div><h2>📚 Cursos</h2><div class="breadcrumb">Un curso, sus módulos con profesor y su calendario de días</div></div>
       <button class="btn btn-primary" onclick="navigate('import-classes')">➕ Nuevo curso (desde Excel)</button>
     </div>
-    ${tarjetas || '<div class="card"><div class="empty-state"><div class="icon">📭</div><p>Aún no hay cursos.<br>Pulsa <strong>Nuevo curso</strong>: llenas los datos una vez y subes un Excel con todos los días, módulos y profesores.</p></div></div>'}
+    ${_arch.length ? `<details class="card" style="margin-top:20px"><summary style="cursor:pointer;font-weight:700;color:var(--green-900)">📁 Cursos archivados (${_arch.length}) — cerrados, solo consulta</summary><div style="margin-top:12px">${_arch.join('')}</div></details>` : ''}
+    ${tarjetas || (_arch.length ? '' : '<div class="card"><div class="empty-state"><div class="icon">📭</div><p>Aún no hay cursos.<br>Pulsa <strong>Nuevo curso</strong>: llenas los datos una vez y subes un Excel con todos los días, módulos y profesores.</p></div></div>')}
     <div class="card" style="margin-top:20px"><details><summary style="cursor:pointer;font-weight:700;color:var(--green-900)">⚙️ Avanzado</summary>
       <p style="font-size:12.5px;color:var(--text-mid);margin:10px 0">Para una clase suelta, fuera de un curso programado por Excel.</p>
       <button class="btn btn-secondary btn-sm" onclick="navigate('new-class')">➕ Crear una clase suelta</button>
@@ -4795,8 +4947,10 @@ function pintarCursoDetalle(mc) {
         <button class="btn btn-secondary" onclick="navigate('import-classes',{cursoId:'${escHtml(id)}'})">➕ Agregar días (Excel)</button>
         <button class="btn btn-secondary" onclick="verHorarioCurso('${escHtml(id)}')">📅 Horario completo</button>
         <button class="btn btn-secondary" onclick="navigate('matriculas')">🎓 Matrículas</button>
+        ${estadoCursoEf(_cur.estados?.get(id)).cerrado ? `<button class="btn btn-success" onclick="reabrirCurso('${escHtml(id)}')">🔓 Reabrir curso</button>` : `<button class="btn btn-danger" onclick="cerrarCurso('${escHtml(id)}')">🔒 Cerrar curso</button>`}
       </div>
     </div>
+    ${estadoCursoEf(_cur.estados?.get(id)).cerrado ? `<div class="card" style="border-color:var(--warning);margin-bottom:16px">🔒 Este curso está <strong>cerrado${estadoCursoEf(_cur.estados.get(id)).auto ? ' automáticamente (pasó 1 día del último bloque)' : ''}</strong>: los alumnos no pueden entrar a clases ni a SENCE. Solo ven su asistencia y declaración durante ${_cur.estados.get(id)?.verDias || 60} días. Los profesores lo ven en solo lectura.</div>` : ''}
     <div class="card" style="margin-bottom:20px">
       <div class="card-header"><h3>📋 Módulos y profesor titular</h3><button class="btn btn-sm btn-secondary" onclick="navigate('malla',{cursoId:'${escHtml(id)}'})">✏️ Editar módulos</button></div>
       ${malla.length ? `<div class="table-wrap"><table><thead><tr><th>Módulo</th><th>Horas del programa</th><th>Horas agendadas (de ${mh} min)</th><th>Titular</th></tr></thead><tbody>${filasMod}</tbody></table></div>`
@@ -4811,6 +4965,29 @@ function pintarCursoDetalle(mc) {
         ${faltan ? `<br><span style="color:var(--warning)">⚠️ Hay ${faltan} bloque(s) con tramos sin profesor.</span>` : ''}</p>
       ${bloques || '<div class="empty-state"><p>No hay bloques para mostrar.</p></div>'}
     </div>`;
+}
+
+async function cerrarCurso(cursoId) {
+  const nombre = _cur.cursos.get(cursoId) || cursoId;
+  try {
+    const abiertos = await db.collection('senceAttendance').where('cursoId', '==', cursoId).where('sessionOpen', '==', true).get();
+    const bloquesVivos = _cur.clases.filter(c => _cursoIdDe(c) === cursoId && c.status === 'active').length;
+    const msg = `¿Cerrar el curso «${nombre}»?\n\n• Los alumnos ya no podrán entrar a clases ni iniciar sesión SENCE.\n• Verán su asistencia y declaración jurada por 60 días (solo lectura).\n• Los profesores lo verán en solo lectura.\n• No se borra nada. Puedes reabrirlo cuando quieras.`
+      + (bloquesVivos ? `\n\n⚠️ Hay ${bloquesVivos} bloque(s) EN CURSO: ciérralos primero si corresponde.` : '')
+      + (abiertos.size ? `\n\n⚠️ ${abiertos.size} alumno(s) tienen la sesión SENCE sin cerrar. Ellos aún podrán cerrarla en SENCE con su ClaveÚnica (el cierre es optativo).` : '');
+    if (!confirm(msg)) return;
+    await db.collection('cursoEstado').doc(cursoId).set({ cursoId, courseName: nombre, estado: 'cerrado', cerradoAt: firebase.firestore.FieldValue.serverTimestamp(), cerradoPor: currentUser.uid, verDias: 60 }, { merge: true });
+    toast('🔒 Curso cerrado.', 'success');
+    renderCursos(_mcCursos(), { cursoId });
+  } catch (e) { toast('❌ ' + e.message, 'error', 7000); }
+}
+async function reabrirCurso(cursoId) {
+  if (!confirm('¿Reabrir este curso? Los alumnos matriculados (no retirados) podrán volver a entrar a sus clases. Se mantiene abierto por 7 días y luego se bloquea solo, salvo que lo cierres tú antes.')) return;
+  try {
+    await db.collection('cursoEstado').doc(cursoId).set({ estado: 'activo', reabiertoAt: firebase.firestore.FieldValue.serverTimestamp(), reabiertoPor: currentUser.uid, extiendeHasta: firebase.firestore.Timestamp.fromMillis(Date.now() + 7 * 86400000) }, { merge: true });
+    toast('🔓 Curso reabierto.', 'success');
+    renderCursos(_mcCursos(), { cursoId });
+  } catch (e) { toast('❌ ' + e.message, 'error', 7000); }
 }
 
 async function cursoCambiarProfesor(classId, idx, uid) {
@@ -5003,12 +5180,18 @@ async function renderMatriculas(mc) {
       _mat.cursos.get(id).n++;
     });
     _mat.alumnos = as.docs.map(d => ({ uid: d.id, name: d.data().name || '', rut: d.data().rut || '' }));
+    // Alumnos que ya terminaron: todas sus matrículas están en cursos cerrados. No se les inscribe en masa en un curso nuevo.
+    const [_ms, _es] = await Promise.all([db.collection('matriculas').get(), cargarEstadosCurso()]);
+    const _tot = new Map(), _ab = new Map();
+    _ms.docs.forEach(d => { const m = d.data(); if (m.estado === 'retirado') return; _tot.set(m.userId, (_tot.get(m.userId) || 0) + 1); if (!estadoCursoEf(_es.get(m.cursoId)).cerrado) _ab.set(m.userId, (_ab.get(m.userId) || 0) + 1); });
+    _mat.terminados = new Set([..._tot.keys()].filter(u => !_ab.get(u)));
+    _mat.estados = _es;
     const sel = document.getElementById('mat_curso');
     if (!_mat.cursos.size) {
       document.getElementById('mat_body').innerHTML = '<div class="empty-state"><div class="icon">📭</div><p>Aún no hay cursos. Crea o importa clases primero (el curso se toma del nombre).</p></div>';
       return;
     }
-    sel.innerHTML = [..._mat.cursos.entries()].map(([id, c]) => `<option value="${id}">${escHtml(c.name)} (${c.n} clases)</option>`).join('');
+    sel.innerHTML = [..._mat.cursos.entries()].map(([id, c]) => `<option value="${id}">${escHtml(c.name)} (${c.n} clases)${estadoCursoEf(_es.get(id)).cerrado ? ' — CERRADO' : ''}</option>`).join('');
     cargarMatriculasCurso(sel.value);
   } catch (e) {
     document.getElementById('mat_body').innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>${escHtml(e.message)}</p></div>`;
@@ -5028,19 +5211,25 @@ async function cargarMatriculasCurso(cursoId) {
     <div class="card">
       <div class="card-header"><h3>✅ Matriculados (${_mat.matriculados.length})</h3>
         <button class="btn btn-sm btn-secondary" onclick="cargarMatriculasCurso('${cursoId}')">🔄</button></div>
-      ${_mat.matriculados.length ? `<div class="table-wrap"><table><thead><tr><th>Alumno</th><th>RUT</th><th></th></tr></thead><tbody>
-        ${_mat.matriculados.map(m => `<tr><td>${escHtml(m.nombre)}</td><td style="font-family:'DM Mono'">${escHtml(m.rut)}</td>
-          <td><button class="btn btn-sm btn-danger" onclick="quitarMatricula('${m.id}')">Quitar</button></td></tr>`).join('')}
+      ${_mat.matriculados.length ? `<div class="table-wrap"><table><thead><tr><th>Alumno</th><th>RUT</th><th>Estado</th><th></th></tr></thead><tbody>
+        ${_mat.matriculados.map(m => m.estado === 'retirado'
+          ? `<tr style="opacity:.75"><td>${escHtml(m.nombre)}</td><td style="font-family:'DM Mono'">${escHtml(m.rut)}</td>
+            <td><span class="badge badge-gray">Retirado</span><div style="font-size:11.5px;color:var(--text-light)">${escHtml(m.retiradoMotivo || '')}</div></td>
+            <td><button class="btn btn-sm btn-secondary" onclick="reincorporarMatricula('${m.id}')">↩️ Reincorporar</button> <button class="btn btn-sm btn-danger" onclick="quitarMatricula('${m.id}')">🗑️</button></td></tr>`
+          : `<tr><td>${escHtml(m.nombre)}</td><td style="font-family:'DM Mono'">${escHtml(m.rut)}</td><td><span class="badge badge-green">Activo</span></td>
+            <td><button class="btn btn-sm btn-warning" onclick="retirarMatricula('${m.id}')">🚪 Retirar del curso</button> <button class="btn btn-sm btn-secondary" onclick="quitarMatricula('${m.id}')" title="Solo para matrículas hechas por error">Eliminar (error)</button></td></tr>`).join('')}
       </tbody></table></div>` : '<div class="empty-state"><p>Nadie matriculado todavía.</p></div>'}
     </div>
     <div class="card">
       <div class="card-header"><h3>➕ Matricular</h3>
-        <button class="btn btn-sm btn-primary" onclick="matricularTodos()">Matricular a TODOS los alumnos (${libres.length})</button></div>
+        <button class="btn btn-sm btn-primary" onclick="matricularTodos()">Matricular a los alumnos sin curso vigente (${libres.filter(a => !_mat.terminados.has(a.uid)).length})</button></div>
+      ${libres.some(a => _mat.terminados.has(a.uid)) ? `<p style="font-size:12.5px;color:var(--text-light);margin:0 0 8px">Los alumnos que ya terminaron un curso cerrado (${libres.filter(a => _mat.terminados.has(a.uid)).length}) no se incluyen en el botón: márcalos a mano si deben repetir.</p>` : ''}
+      ${estadoCursoEf(_mat.estados?.get(cursoId)).cerrado ? `<p style="color:var(--warning);font-size:13px">🔒 Este curso está cerrado: los alumnos que inscribas no podrán entrar hasta que lo reabras.</p>` : ''}
       <div class="form-group"><label>Buscar y marcar alumnos</label>
         <input type="text" id="mat_buscar" placeholder="Nombre o RUT..." oninput="filtrarLibresMat()"></div>
       <div id="mat_libres" style="max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px">
         ${libres.map(a => `<label class="mat-row" data-t="${escHtml(normTxt(a.name + ' ' + a.rut))}" style="display:flex;gap:8px;padding:4px 2px;cursor:pointer">
-          <input type="checkbox" value="${a.uid}"> <span>${escHtml(a.name)} <small style="font-family:'DM Mono';color:var(--text-light)">${escHtml(a.rut)}</small></span></label>`).join('') || '<em>No quedan alumnos por matricular.</em>'}
+          <input type="checkbox" value="${a.uid}"> <span>${escHtml(a.name)} <small style="font-family:'DM Mono';color:var(--text-light)">${escHtml(a.rut)}</small>${_mat.terminados.has(a.uid) ? ' <span class="badge badge-gray">terminó otro curso</span>' : ''}</span></label>`).join('') || '<em>No quedan alumnos por matricular.</em>'}
       </div>
       <div style="margin-top:10px"><button class="btn btn-success" onclick="matricularMarcados()">✅ Matricular marcados</button></div>
       <hr style="margin:18px 0;border:none;border-top:1px solid var(--border)">
@@ -5073,9 +5262,9 @@ function matricularMarcados() {
 }
 function matricularTodos() {
   const ya = new Set(_mat.matriculados.map(m => m.userId));
-  const libres = _mat.alumnos.filter(a => !ya.has(a.uid));
-  if (!libres.length) return toast('Ya están todos matriculados.', 'info');
-  if (!confirm(`¿Matricular a ${libres.length} alumnos en este curso?`)) return;
+  const libres = _mat.alumnos.filter(a => !ya.has(a.uid) && !_mat.terminados.has(a.uid));
+  if (!libres.length) return toast('No hay alumnos sin curso vigente para matricular.', 'info');
+  if (!confirm(`¿Matricular a ${libres.length} alumnos sin curso vigente en este curso?`)) return;
   _matricular(libres).catch(e => toast('❌ ' + e.message, 'error'));
 }
 function _normRutTxt(s) {
@@ -5091,8 +5280,25 @@ function matricularPorRut() {
   if (noHallados.length) toast('⚠️ RUT sin alumno registrado: ' + noHallados.join(', '), 'warning', 9000);
   _matricular(hallados).catch(e => toast('❌ ' + e.message, 'error'));
 }
+async function retirarMatricula(id) {
+  const m = _mat.matriculados.find(x => x.id === id); if (!m) return;
+  const motivo = prompt(`Retirar a ${m.nombre} de este curso.\n\nEl alumno pierde el acceso al curso y a SENCE. Su asistencia ya registrada se conserva y queda anotado el retiro.\n\nMotivo (obligatorio):`);
+  if (motivo === null) return;
+  if (!motivo.trim()) return toast('⚠️ Escribe el motivo del retiro.', 'warning');
+  try {
+    await db.collection('matriculas').doc(id).update({ estado: 'retirado', retiradoAt: firebase.firestore.FieldValue.serverTimestamp(), retiradoPor: currentUser.uid, retiradoMotivo: motivo.trim().slice(0, 300) });
+    toast('🚪 Alumno retirado del curso.', 'success'); cargarMatriculasCurso(_mat.cursoId);
+  } catch (e) { toast('❌ ' + e.message, 'error'); }
+}
+async function reincorporarMatricula(id) {
+  if (!confirm('¿Reincorporar al alumno a este curso?')) return;
+  try {
+    await db.collection('matriculas').doc(id).update({ estado: 'activo', reincorporadoAt: firebase.firestore.FieldValue.serverTimestamp(), reincorporadoPor: currentUser.uid });
+    toast('↩️ Alumno reincorporado.', 'success'); cargarMatriculasCurso(_mat.cursoId);
+  } catch (e) { toast('❌ ' + e.message, 'error'); }
+}
 async function quitarMatricula(id) {
-  if (!confirm('¿Quitar esta matrícula? El alumno dejará de ver el curso (su asistencia ya registrada se conserva).')) return;
+  if (!confirm('¿Eliminar esta matrícula? Úsalo solo si se hizo por error (para un alumno que se va, usa «Retirar del curso», que deja el registro).')) return;
   try { await db.collection('matriculas').doc(id).delete(); cargarMatriculasCurso(_mat.cursoId); }
   catch (e) { toast('❌ ' + e.message, 'error'); }
 }
@@ -6190,6 +6396,7 @@ async function cargarMisDeclaraciones() {
    la clase en vivo), complementa el chat sincrónico.
 ════════════════════════════════════════════════ */
 async function renderForo(mc) {
+  _foroCursosOk = null;
   mc.innerHTML = `
     <div class="page-header">
       <div><h2>💬 Foro / Mensajería del Curso</h2><div class="breadcrumb">Comunicación asincrónica — disponible en cualquier momento</div></div>
@@ -6199,13 +6406,23 @@ async function renderForo(mc) {
       <input type="text" id="foro_curso" placeholder="Ej: Guardia de Seguridad OS10" onkeydown="if(event.key==='Enter')cargarForo()">
       <small>Escribe el nombre exacto del curso y presiona Enter para ver/crear su hilo de mensajes.</small>
     </div>
+    <div id="foroAviso"></div>
     <button class="btn btn-secondary btn-sm" onclick="cargarForo()">🔍 Ver Foro del Curso</button>
     <div id="foroContainer" style="margin-top:16px"></div>`;
+  if (currentRole === 'student') {
+    const [md, est] = await Promise.all([cargarMisMatriculasDocs(), cargarEstadosCurso()]);
+    _foroCursosOk = md.filter(m => _cursoAbierto(est, m.cursoId)).map(m => m.courseName).filter(Boolean);
+    if (!_foroCursosOk.length) { mc.innerHTML = '<div class="page-header"><div><h2>💬 Foro del Curso</h2></div></div><div class="empty-state"><div class="icon">✅</div><p>Tu curso ya finalizó: el foro está cerrado.</p></div>'; return; }
+    document.getElementById('foro_curso').value = _foroCursosOk[0];
+    document.getElementById('foroAviso').innerHTML = '';
+  }
 }
+let _foroCursosOk = null;
 async function cargarForo() {
   const curso = document.getElementById('foro_curso').value.trim();
   const cont  = document.getElementById('foroContainer');
   if (!curso) return toast('⚠️ Escribe el nombre del curso.', 'warning');
+  if (currentRole === 'student' && _foroCursosOk && !_foroCursosOk.includes(curso)) return toast('⚠️ Solo puedes ver el foro de tu curso vigente.', 'warning');
   if (_foroListener) { _foroListener(); _foroListener = null; }
   cont.innerHTML = `
     <div id="foroMensajes"><div class="empty-state"><div class="icon">⏳</div><p>Cargando mensajes...</p></div></div>
