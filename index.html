@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>INASEP — Clases en Vivo / Integración SENCE</title>
+<title>INASEP — Plataforma de Clases SENCE · Online</title>
 <meta name="robots" content="noindex, nofollow">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -21,8 +21,8 @@
    VARIABLES — hereda paleta INASEP
 ══════════════════════════════════════════════ */
 :root {
-  --green-900: #0d1f14;
-  --green-800: #142a1b;
+  --green-900: #132A16;   /* verde del escudo INASEP */
+  --green-800: #1a3820;
   --green-700: #1e3d28;
   --green-600: #2a5536;
   --green-500: #3d7a4e;
@@ -31,13 +31,15 @@
   --green-200: #9fcfab;
   --green-100: #d4edda;
   --green-50:  #f0f8f2;
-  --primary:      #4a8c5c;
-  --primary-dark: #3d7a4e;
+  --gold:         #F2D01A;   /* dorado del escudo INASEP */
+  --gold-dark:    #B8960C;
+  --primary:      #2b6a3d;
+  --primary-dark: #1f5230;
   --primary-light:#68a87a;
   --accent:       #8fbc8f;
-  --sidebar-bg:   #0d1f14;
-  --sidebar-nav:  #142a1b;
-  --sidebar-hover:#1e3d28;
+  --sidebar-bg:   #132A16;
+  --sidebar-nav:  #1a3820;
+  --sidebar-hover:#234a2c;
   --sidebar-border: rgba(255,255,255,0.07);
   --bg:       #f4f7f5;
   --card-bg:  #ffffff;
@@ -648,6 +650,53 @@ iframe.video-frame { width:100%; height:100%; min-height:500px; border:none; }
   .page-header h2 { font-size: 17px; }
 }
 
+/* ══════════ MARCA INASEP (verde + dorado del escudo) + SENCE ══════════ */
+.sidebar-top .brand { color:var(--gold); font-size:17px; font-weight:800; letter-spacing:1.5px; }
+.sidebar-top .sub { color:rgba(255,255,255,0.6); }
+.sidebar-top { border-bottom:1px solid rgba(242,208,26,0.25); }
+.sidebar-nav a.active { color:#fff; border-left-color:var(--gold); }
+.sidebar-footer { border-top:1px solid rgba(242,208,26,0.25); }
+.sb-sence { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px; font-size:10.5px; color:rgba(255,255,255,0.55); letter-spacing:.4px; text-transform:uppercase; }
+.sence-pill { background:#fff; border-radius:8px; padding:4px 9px; display:inline-flex; align-items:center; }
+.sence-pill img { height:20px; width:auto; display:block; }
+.topbar { border-bottom:3px solid var(--gold); }
+.topbar-sence { height:24px; width:auto; opacity:.95; }
+@media (max-width:420px) { .topbar-sence { display:none; } }
+.btn-primary { background:var(--primary); }
+.btn-primary:hover { box-shadow:0 4px 16px rgba(19,42,22,0.35); }
+
+/* Pantalla de ingreso */
+.auth-wrap { background:var(--green-900); background-image:radial-gradient(ellipse at 15% 20%, rgba(242,208,26,0.13) 0%, transparent 55%), radial-gradient(ellipse at 85% 90%, rgba(74,140,92,0.22) 0%, transparent 55%); padding:24px 16px; }
+.auth-shell { display:flex; width:100%; max-width:980px; border-radius:22px; overflow:hidden; box-shadow:0 30px 80px rgba(0,0,0,0.45); }
+.auth-brand { flex:1.05; background:linear-gradient(160deg,#1c3b22 0%,#132A16 70%); color:#fff; padding:48px 40px; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; border-right:4px solid var(--gold); }
+.auth-brand-logo { width:170px; max-width:60%; height:auto; margin-bottom:18px; filter:drop-shadow(0 8px 18px rgba(0,0,0,0.35)); }
+.auth-brand-name { font-size:36px; font-weight:800; letter-spacing:5px; color:var(--gold); }
+.auth-brand-full { font-size:14px; letter-spacing:.6px; margin-top:4px; color:rgba(255,255,255,0.92); }
+.auth-brand-line { width:64px; height:3px; background:var(--gold); border-radius:2px; margin:18px 0 14px; }
+.auth-brand-plat { font-size:15px; font-weight:600; letter-spacing:.4px; }
+.auth-brand-list { list-style:none; padding:0; margin:18px 0 0; font-size:13px; color:rgba(255,255,255,0.78); line-height:1.9; }
+.auth-brand-list li::before { content:"✓  "; color:var(--gold); font-weight:700; }
+.auth-sence { margin-top:28px; display:flex; flex-direction:column; align-items:center; gap:8px; font-size:10.5px; letter-spacing:1px; text-transform:uppercase; color:rgba(255,255,255,0.6); }
+.auth-sence .sence-pill { padding:8px 16px; border-radius:10px; }
+.auth-sence .sence-pill img { height:34px; }
+.auth-shell .auth-card { flex:1; max-width:none; border-radius:0; box-shadow:none; padding:44px 40px 32px; display:flex; flex-direction:column; justify-content:center; }
+.auth-card h2 { color:var(--green-900); }
+.auth-card h2::after { content:""; display:block; width:44px; height:3px; background:var(--gold); border-radius:2px; margin:10px auto 0; }
+.auth-mobile-brand, .auth-sence-mob { display:none; }
+.auth-sence-mob { align-items:center; justify-content:center; gap:10px; margin-top:16px; font-size:10.5px; letter-spacing:.8px; text-transform:uppercase; color:var(--text-light); }
+.auth-sence-mob img { height:24px; width:auto; }
+@media (max-width:860px) {
+  .auth-brand { display:none; }
+  .auth-shell { max-width:460px; border-radius:18px; }
+  .auth-shell .auth-card { padding:26px 22px 24px; margin:0; border-top:5px solid var(--gold); }
+  .auth-mobile-brand { display:block; text-align:center; margin-bottom:14px; }
+  .auth-mobile-brand img { height:92px; width:auto; margin-bottom:6px; }
+  .amb-name { font-size:26px; font-weight:800; letter-spacing:4px; color:var(--green-900); }
+  .amb-full { font-size:12.5px; color:var(--text-mid); margin-top:2px; }
+  .amb-plat { font-size:12px; font-weight:700; color:var(--gold-dark); margin-top:6px; letter-spacing:.3px; }
+  .auth-sence-mob { display:flex; }
+}
+
 .ramo-ahora{display:flex;gap:12px;align-items:center;background:var(--green-50,#eef7f1);border-left:6px solid #F2D01A;border-radius:10px;padding:10px 14px;margin:0 0 12px}
 .ramo-ahora .ramo-ico{font-size:28px}.ramo-et{font-size:11.5px;letter-spacing:.5px;font-weight:700;color:var(--text-mid)}
 .ramo-nom{font-size:19px;font-weight:800;line-height:1.25}.ramo-sub{font-size:13px;color:var(--text-mid)}
@@ -665,10 +714,22 @@ iframe.video-frame { width:100%; height:100%; min-height:500px; border:none; }
      AUTH SCREEN
 ════════════════════════════════════ -->
 <div id="authSection" class="auth-wrap">
+ <div class="auth-shell">
+  <aside class="auth-brand">
+    <img class="auth-brand-logo" src="https://inasep.github.io/SENCEINASEP/logo.png" alt="INASEP" onerror="this.style.display='none'">
+    <div class="auth-brand-name">INASEP</div>
+    <div class="auth-brand-full">Instituto Nacional de Seguridad Privada</div>
+    <div class="auth-brand-line"></div>
+    <div class="auth-brand-plat">Plataforma de Clases SENCE · Online</div>
+    <ul class="auth-brand-list"><li>Clases en vivo con registro de asistencia</li><li>Ingreso con tu RUT</li><li>Libro de clases electrónico</li></ul>
+    <div class="auth-sence"><span>Registro de asistencia</span><div class="sence-pill"><img src="https://inasep.github.io/SENCEINASEP/logosence.png" alt="SENCE" onerror="this.parentNode.style.display='none'"></div></div>
+  </aside>
   <div class="auth-card">
-    <div class="auth-logo">
-      <img src="https://inasep.github.io/SENCEINASEP/logo.png" alt="INASEP" style="height:72px;object-fit:contain;margin-bottom:10px;display:block;margin-left:auto;margin-right:auto;">
-      <div class="brand-sub">Clases en Vivo — Módulo SENCE</div>
+    <div class="auth-mobile-brand">
+      <img src="https://inasep.github.io/SENCEINASEP/logo.png" alt="INASEP" onerror="this.style.display='none'">
+      <div class="amb-name">INASEP</div>
+      <div class="amb-full">Instituto Nacional de Seguridad Privada</div>
+      <div class="amb-plat">Plataforma de Clases SENCE · Online</div>
     </div>
     <div id="alertAuth" class="alert"></div>
     <h2>Iniciar Sesión</h2>
@@ -718,9 +779,11 @@ iframe.video-frame { width:100%; height:100%; min-height:500px; border:none; }
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
         +56 9 4406 1866
       </a>
+      <div class="auth-sence-mob"><span>Registro de asistencia</span><img src="https://inasep.github.io/SENCEINASEP/logosence.png" alt="SENCE" onerror="this.parentNode.style.display='none'"></div>
       <p style="font-size:10px;color:var(--text-light);margin:12px 0 0;">© 2026 INASEP · Todos los derechos reservados</p>
     </div>
   </div>
+ </div>
 </div>
 
 <!-- ═══════════════════════════════════
@@ -734,10 +797,10 @@ iframe.video-frame { width:100%; height:100%; min-height:500px; border:none; }
   <div class="sidebar" id="sidebar">
     <div class="sidebar-top">
       <div style="display:flex;align-items:center;gap:10px;">
-        <img src="https://inasep.github.io/SENCEINASEP/logo.png" alt="INASEP" style="height:36px;object-fit:contain;flex-shrink:0;">
+        <img src="https://inasep.github.io/SENCEINASEP/logo.png" alt="INASEP" style="height:46px;object-fit:contain;flex-shrink:0;" onerror="this.style.display='none'">
         <div>
           <div class="brand">INASEP</div>
-          <div class="sub">Módulo Clases en Vivo</div>
+          <div class="sub">Plataforma de Clases SENCE</div>
         </div>
       </div>
     </div>
@@ -751,6 +814,7 @@ iframe.video-frame { width:100%; height:100%; min-height:500px; border:none; }
     <nav class="sidebar-nav" id="sidebarNav"></nav>
 
     <div class="sidebar-footer">
+      <div class="sb-sence"><span>Registro de asistencia</span><div class="sence-pill"><img src="https://inasep.github.io/SENCEINASEP/logosence.png" alt="SENCE" onerror="this.parentNode.parentNode.style.display='none'"></div></div>
       <button onclick="logout()">🚪 Cerrar Sesión</button>
     </div>
   </div>
@@ -760,6 +824,7 @@ iframe.video-frame { width:100%; height:100%; min-height:500px; border:none; }
     <div class="topbar">
       <button class="mob-menu-btn" onclick="openSidebar()">☰</button>
       <span class="topbar-title" id="topbarTitle">Clases en Vivo</span>
+      <img class="topbar-sence" src="https://inasep.github.io/SENCEINASEP/logosence.png" alt="SENCE" onerror="this.style.display='none'">
       <div class="topbar-user">
         <div class="avatar" id="topbarAvatar">?</div>
         <span id="topbarName"></span>
